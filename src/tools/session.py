@@ -6,6 +6,8 @@ from mcp.server.fastmcp import FastMCP
 import mph
 import mph.session as mph_session
 
+from ..comsol_compat import enable_mph_legacy_discovery
+
 
 class SessionManager:
     """Singleton manager for COMSOL client session."""
@@ -56,6 +58,7 @@ class SessionManager:
                 self._current_model = None
         if self._client is None:
             try:
+                enable_mph_legacy_discovery()
                 if mph_session.client is not None:
                     self._client = mph_session.client
                     return {
@@ -89,6 +92,7 @@ class SessionManager:
                 "error": "COMSOL session already running. Disconnect first."
             }
         try:
+            enable_mph_legacy_discovery()
             if mph_session.client is not None:
                 self._client = mph_session.client
                 return {

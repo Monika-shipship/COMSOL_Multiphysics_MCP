@@ -3,6 +3,7 @@
 from typing import Optional, Sequence
 from mcp.server.fastmcp import FastMCP
 
+from ..comsol_compat import component_container, component_containers
 from .session import session_manager
 
 _tag_counter = {}
@@ -10,8 +11,7 @@ _tag_counter = {}
 
 def _find_physics_java(jm, physics_name):
     """Look up a physics node by label or tag across all components."""
-    for i in range(jm.component().size()):
-        comp = jm.component().get(i)
+    for comp in component_containers(jm):
         for j in range(comp.physics().size()):
             p = comp.physics().get(j)
             if p.label() == physics_name or p.tag() == physics_name:
@@ -153,9 +153,9 @@ def register_physics_tools(mcp: FastMCP) -> None:
             jm = model.java
 
             if component_name:
-                comp = jm.component(component_name)
+                comp = component_container(jm, component_name)
             else:
-                comp = jm.component().get(0)
+                comp = component_containers(jm)[0]
 
             if comp is None:
                 return {"success": False, "error": f"Component not found: {component_name}"}
@@ -199,7 +199,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = jm.component().get(0)
+            comp = component_containers(jm)[0]
             physics_java = comp.physics().create("es", "Electrostatics")
 
             if domain_selection:
@@ -244,7 +244,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = jm.component().get(0)
+            comp = component_containers(jm)[0]
             physics_java = comp.physics().create("solid", "SolidMechanics")
 
             if domain_selection:
@@ -289,7 +289,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = jm.component().get(0)
+            comp = component_containers(jm)[0]
             physics_java = comp.physics().create("ht", "HeatTransfer")
 
             if domain_selection:
@@ -334,7 +334,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = jm.component().get(0)
+            comp = component_containers(jm)[0]
             physics_java = comp.physics().create("spf", "LaminarFlow")
 
             if domain_selection:
@@ -470,9 +470,9 @@ def register_physics_tools(mcp: FastMCP) -> None:
             jm = model.java
             materials = model.materials()
             tag = material_name.replace(" ", "_").replace("-", "_")
+            comp = component_containers(jm)[0]
 
             if material_name not in materials:
-                comp = jm.component().get(0)
                 try:
                     mat = comp.material().create(tag, "Common")
                     mat.label(material_name)
@@ -657,7 +657,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
         try:
             jm = model.java
 
-            comp = jm.component(component_name)
+            comp = component_container(jm, component_name)
             if comp is None:
                 return {"success": False, "error": f"Component '{component_name}' not found."}
 

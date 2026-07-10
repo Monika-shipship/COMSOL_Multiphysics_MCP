@@ -5,6 +5,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import mph
 
+from ..comsol_compat import component_containers
 from .session import session_manager
 from ..utils.versioning import (
     generate_version_path, 
@@ -131,13 +132,19 @@ def register_model_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = jm.component().create(component_name, True, space_dimension)
+            try:
+                jm.component().create(component_name, True, space_dimension)
+                legacy_mode = False
+            except AttributeError:
+                legacy_mode = True
 
             return {
                 "success": True,
                 "component": component_name,
                 "space_dimension": space_dimension,
                 "model": model.name(),
+                "legacy_mode": legacy_mode,
+                "message": "COMSOL 5.2a uses top-level geometry and physics nodes; the component is virtual." if legacy_mode else None,
             }
         except Exception as e:
             return {"success": False, "error": f"Failed to create component: {str(e)}"}
@@ -166,12 +173,11 @@ def register_model_tools(mcp: FastMCP) -> None:
             jm = model.java
             components = []
             
-            for i in range(jm.component().size()):
-                comp = jm.component().get(i)
+            for comp in component_containers(jm):
                 if comp is not None:
                     components.append({
-                        "name": comp.tag(),
-                        "label": comp.label() if hasattr(comp, 'label') else comp.tag()
+                        "name": comp.tag() if hasattr(comp, 'tag') else 'comp1',
+                        "label": comp.label() if hasattr(comp, 'label') else (comp.tag() if hasattr(comp, 'tag') else 'comp1')
                     })
             
             return {

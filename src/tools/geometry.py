@@ -3,7 +3,37 @@
 from typing import Optional, Sequence
 from mcp.server.fastmcp import FastMCP
 
+from ..comsol_compat import component_container
 from .session import session_manager
+
+
+def _create_geometry_feature(feature_list, feature_type: str, feature_name: Optional[str]):
+    """Use the Java overload that matches whether a feature name was supplied."""
+    if feature_name is None:
+        return feature_list.create(feature_type)
+    return feature_list.create(feature_type, feature_name)
+
+
+def _geometry_feature_properties(kwargs: dict) -> dict:
+    """Normalize FastMCP's nested ``kwargs`` argument."""
+    nested = kwargs.pop("kwargs", None)
+    if nested is None:
+        return kwargs
+    if not isinstance(nested, dict):
+        raise TypeError("kwargs must be a dictionary of COMSOL feature properties")
+    return nested
+
+
+def _resolve_geometry_name(available_names, java_geometries, requested_name: Optional[str]):
+    """Resolve a COMSOL geometry tag to the label used by MPh navigation."""
+    if requested_name is None:
+        return available_names[0] if available_names else None
+    if requested_name in available_names:
+        return requested_name
+    for geometry in java_geometries:
+        if geometry.tag() == requested_name:
+            return str(geometry.label())
+    return None
 
 
 def _get_geometry_node(model, geometry_name: Optional[str], component_name: str = "comp1"):
@@ -15,7 +45,7 @@ def _get_geometry_node(model, geometry_name: Optional[str], component_name: str 
     jm = model.java
     
     try:
-        comp = jm.component(component_name)
+        comp = component_container(jm, component_name)
         if comp is None:
             return None, f"Component '{component_name}' not found."
         
@@ -98,7 +128,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             
             geom_name = geometry_name or "geom1"
             
-            comp = jm.component(component_name)
+            comp = component_container(jm, component_name)
             if comp is None:
                 return {
                     "success": False,
@@ -161,14 +191,16 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if not geometries:
                 return {"success": False, "error": "No geometry sequences found. Create one first."}
             
-            target_geom = geometry_name or geometries[0]
-            if target_geom not in geometries:
-                return {"success": False, "error": f"Geometry not found: {target_geom}"}
+            comp = component_container(model.java, "comp1")
+            java_geometries = list(comp.geom())
+            target_geom = _resolve_geometry_name(geometries, java_geometries, geometry_name)
+            if target_geom is None:
+                return {"success": False, "error": f"Geometry not found: {geometry_name}"}
             
             geom_node = model / "geometries" / target_geom
-            feature_node = geom_node.create(feature_type, feature_name)
+            feature_node = _create_geometry_feature(geom_node, feature_type, feature_name)
             
-            for prop_name, prop_value in kwargs.items():
+            for prop_name, prop_value in _geometry_feature_properties(kwargs).items():
                 try:
                     feature_node.property(prop_name, prop_value)
                 except Exception:
