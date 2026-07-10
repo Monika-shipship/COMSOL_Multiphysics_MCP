@@ -1,8 +1,12 @@
 """Knowledge base tools for COMSOL MCP Server."""
 
+import importlib.util
+import re
 from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
+
+from .pdf_processor import DEFAULT_PDF_DIR, PDFProcessor
 
 KNOWLEDGE_DIR = Path(__file__).parent / "prompts"
 
@@ -344,66 +348,178 @@ def get_best_practices(category: str) -> dict:
 
 
 # Module-level PDF search functions for direct import and testing
+_MODULE_KEYWORDS = {
+    "Heat_Transfer_Module": {"heat", "thermal", "temperature", "convection", "radiation"},
+    "CFD_Module": {"fluid", "flow", "inlet", "outlet", "turbulent", "laminar", "velocity"},
+    "ACDC_Module": {"electric", "electrostatic", "magnetic", "current", "voltage", "acdc"},
+    "Structural_Mechanics_Module": {"stress", "strain", "solid", "elastic", "mechanics"},
+    "Geomechanics_Module": {"geomechanics", "soil", "rock", "porous", "subsurface"},
+}
+_DOCUMENT_KEYWORDS = {
+    "postprocessing": {"image", "export", "plot", "postprocess", "result", "visualization"},
+    "programming": {"api", "java", "method", "function", "script"},
+    "reference": {"setting", "solver", "mesh", "geometry", "material"},
+}
+_MAX_PAGES_PER_PDF = 80
+_MAX_FALLBACK_PDFS = 24
+
+
+def _pdf_search_ready() -> bool:
+    """Check only the local PDF parser without importing embedding dependencies."""
+    return importlib.util.find_spec("fitz") is not None
+
+
+def _query_terms(query: str) -> list[str]:
+    """Return the meaningful ASCII terms used for deterministic matching."""
+    return [term for term in re.findall(r"[A-Za-z0-9_]+", query.lower()) if len(term) > 1]
+
+
+def _keyword_score(query: str, text: str) -> float:
+    """Score a PDF page by exact query-term matches without an embedding model."""
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+    haystack = text.lower()
+    matches = sum(len(re.findall(rf"\b{re.escape(term)}\b", haystack)) for term in terms)
+    return matches / len(terms)
+
+
+def _local_pdf_files(processor: PDFProcessor, query: str, module: Optional[str]) -> list[Path]:
+    """Prefer likely modules so the fallback is useful without indexing every manual."""
+    files = processor.get_pdf_files()
+    if module:
+        return [path for path in files if processor.get_module_name(path) == module]
+
+    terms = set(_query_terms(query))
+    preferred = {
+        name for name, keywords in _MODULE_KEYWORDS.items() if terms.intersection(keywords)
+    }
+    if preferred:
+        return [path for path in files if processor.get_module_name(path) in preferred]
+
+    general = [path for path in files if processor.get_module_name(path) == "COMSOL_Multiphysics"]
+    introductions = [path for path in files if path.name.startswith("IntroductionTo")]
+
+    def priority(path: Path) -> int:
+        filename = path.stem.lower()
+        return sum(
+            len(keywords.intersection(terms))
+            for document_hint, keywords in _DOCUMENT_KEYWORDS.items()
+            if document_hint in filename
+        )
+
+    return sorted(general + introductions, key=priority, reverse=True)[:_MAX_FALLBACK_PDFS]
+
+
+def _matching_excerpt(text: str, query: str, limit: int = 900) -> str:
+    """Return a compact result centered around the first matching keyword."""
+    normalized = " ".join(text.split())
+    terms = _query_terms(query)
+    first_match = min(
+        (normalized.lower().find(term) for term in terms if normalized.lower().find(term) >= 0),
+        default=0,
+    )
+    start = max(0, first_match - 160)
+    return normalized[start:start + limit]
+
+
+def _local_pdf_search(query: str, n_results: int, module: Optional[str] = None) -> list[dict]:
+    """Search available PDF pages locally when no ready semantic index exists."""
+    processor = PDFProcessor(DEFAULT_PDF_DIR)
+    results = []
+    for pdf_path in _local_pdf_files(processor, query, module):
+        module_name = processor.get_module_name(pdf_path)
+        for page_number, page_text in processor.extract_text_from_pdf(pdf_path):
+            if page_number > _MAX_PAGES_PER_PDF:
+                break
+            text = processor.clean_text(page_text)
+            score = _keyword_score(query, text)
+            if score <= 0:
+                continue
+            results.append({
+                "text": _matching_excerpt(text, query),
+                "source": str(pdf_path.relative_to(DEFAULT_PDF_DIR)),
+                "module": module_name,
+                "chapter": None,
+                "page": page_number,
+                "score": score,
+            })
+    return sorted(results, key=lambda item: item["score"], reverse=True)[:n_results]
+
+
+def _semantic_pdf_search(query: str, n_results: int, module: Optional[str]) -> Optional[dict]:
+    """Use a vector index only when its embedding model is already installed locally."""
+    try:
+        from .retriever import _find_local_model_path, get_retriever
+
+        retriever = get_retriever()
+        if not retriever.is_initialized:
+            if not _find_local_model_path() or not retriever.initialize():
+                return None
+        stats = retriever.get_stats()
+        if stats.get("count", 0) == 0:
+            return None
+        results = retriever.search(query, n_results, module)
+        return {
+            "success": True,
+            "backend": "semantic",
+            "query": query,
+            "module_filter": module,
+            "results": [result.to_dict() for result in results],
+            "count": len(results),
+            "total_indexed": stats["count"],
+        }
+    except Exception:
+        return None
+
+
 def get_pdf_search(query: str, n_results: int = 5, module: Optional[str] = None) -> dict:
-    """Search COMSOL PDF documentation using semantic search."""
-    from .retriever import get_retriever, check_pdf_dependencies
-    
-    deps = check_pdf_dependencies()
-    if not deps.get("chromadb") or not deps.get("pymupdf"):
+    """Search COMSOL PDF documentation without requiring a network download."""
+    if not _pdf_search_ready():
         return {
             "success": False,
-            "error": "PDF search requires additional dependencies. Install with: pip install chromadb pymupdf sentence-transformers",
-            "missing_deps": [k for k, v in deps.items() if not v],
+            "error": "PDF search requires PyMuPDF. Install with: pip install pymupdf",
+            "missing_deps": ["pymupdf"],
         }
-    
-    retriever = get_retriever()
-    if not retriever.is_initialized:
-        retriever.initialize()
-    stats = retriever.get_stats()
-    
-    if not stats.get("initialized") or stats.get("count", 0) == 0:
+
+    n_results = max(1, min(n_results, 20))
+    semantic = _semantic_pdf_search(query, n_results, module)
+    if semantic is not None:
+        return semantic
+
+    results = _local_pdf_search(query, n_results, module)
+    if not results:
         return {
             "success": False,
-            "error": "PDF knowledge base not built. Run the build script first.",
-            "hint": "Run: python scripts/build_knowledge_base.py",
+            "backend": "local_lexical",
+            "error": "No matching text was found in the available PDF documentation.",
+            "query": query,
+            "module_filter": module,
         }
-    
-    n_results = min(n_results, 20)
-    results = retriever.search(query, n_results, module)
-    
     return {
         "success": True,
+        "backend": "local_lexical",
         "query": query,
         "module_filter": module,
-        "results": [r.to_dict() for r in results],
+        "results": results,
         "count": len(results),
-        "total_indexed": stats.get("count", 0),
     }
 
 
 def get_pdf_search_status() -> dict:
     """Get the status of the PDF documentation search system."""
-    from .retriever import get_retriever, check_pdf_dependencies
-    from .pdf_processor import PDFProcessor, DEFAULT_PDF_DIR
-    
-    deps = check_pdf_dependencies()
+    ready = _pdf_search_ready()
     
     result = {
         "success": True,
-        "dependencies": deps,
-        "all_deps_installed": all(deps.values()),
+        "dependencies": {"pymupdf": ready},
+        "all_deps_installed": ready,
     }
     
-    if not deps.get("chromadb"):
-        result["status"] = "Dependencies not installed"
-        result["hint"] = "Run: pip install chromadb pymupdf sentence-transformers"
+    if not ready:
+        result["status"] = "PyMuPDF is not installed"
+        result["hint"] = "Run: pip install pymupdf"
         return result
-    
-    retriever = get_retriever()
-    if not retriever.is_initialized:
-        retriever.initialize()
-    stats = retriever.get_stats()
-    result["vector_store"] = stats
     
     try:
         processor = PDFProcessor(DEFAULT_PDF_DIR)
@@ -415,11 +531,9 @@ def get_pdf_search_status() -> dict:
     except Exception as e:
         result["pdf_error"] = str(e)
     
-    if stats.get("count", 0) == 0:
-        result["status"] = "Knowledge base not built"
-        result["hint"] = "Run: python scripts/build_knowledge_base.py"
-    else:
-        result["status"] = "Ready"
+    result["vector_store"] = {"initialized": False, "count": 0}
+    result["status"] = "Ready (local lexical fallback)"
+    result["backend"] = "local_lexical"
     
     return result
 

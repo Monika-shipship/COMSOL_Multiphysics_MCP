@@ -4,6 +4,7 @@ from typing import Optional, Union, Sequence
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
+from ..comsol_compat import is_legacy_model
 from .session import session_manager
 
 
@@ -11,8 +12,32 @@ def _resolve_dataset(model, dataset: Optional[str]) -> Optional[str]:
     """Choose the current model's first dataset when no explicit tag is supplied."""
     if dataset:
         return dataset
+    java_model = getattr(model, "java", None)
+    if java_model is not None and is_legacy_model(java_model):
+        tags = java_model.result().dataset().tags()
+        return str(tags[0]) if tags else None
     datasets = model.datasets()
     return datasets[0] if datasets else None
+
+
+def _create_legacy_data_export(exports, tag: str, dataset: str, file_path: str):
+    """Create a COMSOL 5.2a Data export feature for a solved dataset."""
+    export = exports.create(tag, "Data")
+    export.set("data", dataset)
+    export.set("filename", file_path)
+    return export
+
+
+def _legacy_export_tag(exports, requested_tag: Optional[str]) -> str:
+    """Choose a non-conflicting export tag without changing a user export node."""
+    existing = {str(tag) for tag in exports.tags()}
+    base = requested_tag or "codexdata"
+    if base not in existing:
+        return base
+    index = 1
+    while f"{base}{index}" in existing:
+        index += 1
+    return f"{base}{index}"
 
 
 def register_results_tools(mcp: FastMCP) -> None:
@@ -229,6 +254,24 @@ def register_results_tools(mcp: FastMCP) -> None:
             }
         
         try:
+            if file_path and is_legacy_model(model.java):
+                dataset = _resolve_dataset(model, None)
+                if not dataset:
+                    return {"success": False, "error": "No solution dataset is available for data export."}
+                output = Path(file_path).expanduser()
+                output.parent.mkdir(parents=True, exist_ok=True)
+                exports = model.java.result().export()
+                tag = _legacy_export_tag(exports, node_name)
+                _create_legacy_data_export(exports, tag, dataset, str(output)).run()
+                if not output.is_file() or output.stat().st_size == 0:
+                    return {"success": False, "error": "COMSOL completed the data export but no output file was created."}
+                return {
+                    "success": True,
+                    "node": tag,
+                    "file": str(output),
+                    "dataset": dataset,
+                    "message": f"Data exported to: {output}",
+                }
             model.export(node_name, file_path)
             
             return {

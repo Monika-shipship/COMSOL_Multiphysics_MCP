@@ -397,6 +397,30 @@ def test_resolve_results_dataset_uses_first_available_dataset():
     assert _resolve_dataset(Model(), "custom") == "custom"
 
 
+def test_resolve_results_dataset_uses_legacy_java_dataset_tag():
+    from src.tools.results import _resolve_dataset
+
+    class Datasets:
+        def tags(self):
+            return ["dset1"]
+
+    class Results:
+        def dataset(self):
+            return Datasets()
+
+    class JavaModel:
+        def result(self):
+            return Results()
+
+    class Model:
+        java = JavaModel()
+
+        def datasets(self):
+            return ["Study 1//Solution 1"]
+
+    assert _resolve_dataset(Model(), None) == "dset1"
+
+
 def test_legacy_model_inspection_reads_top_level_java_tags():
     from src.tools.model import _legacy_model_structure
 
@@ -606,3 +630,99 @@ def test_create_legacy_parametric_sweep_uses_study_feature_api():
     assert _create_legacy_parametric_sweep(study, "param", "a", ["1", "2"]) == "param"
     assert study.features.calls == [("param", "Parametric")]
     assert study.features.sweep.values == [("pname", ["a"]), ("plist", ["1", "2"])]
+
+
+def test_local_pdf_search_returns_ranked_matching_pages(monkeypatch, tmp_path: Path):
+    from src.knowledge import embedded
+
+    class FakeProcessor:
+        def __init__(self, _pdf_dir):
+            pass
+
+        def get_pdf_files(self):
+            return [
+                tmp_path / "Heat_Transfer_Module" / "guide.pdf",
+                tmp_path / "CFD_Module" / "guide.pdf",
+            ]
+
+        def get_module_name(self, pdf_path):
+            return pdf_path.parent.name
+
+        def extract_text_from_pdf(self, pdf_path):
+            if pdf_path.parent.name == "Heat_Transfer_Module":
+                return [(7, "Temperature boundary condition sets the heat transfer temperature.")]
+            return [(2, "Velocity inlet and pressure outlet are fluid flow conditions.")]
+
+        def clean_text(self, text):
+            return text
+
+    monkeypatch.setattr(embedded, "PDFProcessor", FakeProcessor, raising=False)
+    monkeypatch.setattr(embedded, "DEFAULT_PDF_DIR", tmp_path, raising=False)
+
+    results = embedded._local_pdf_search("temperature boundary", 3)
+
+    assert len(results) == 1
+    assert results[0]["module"] == "Heat_Transfer_Module"
+    assert results[0]["page"] == 7
+    assert results[0]["score"] > 0
+
+
+def test_create_legacy_data_export_configures_dataset_and_filename():
+    from src.tools.results import _create_legacy_data_export
+
+    class ExportNode:
+        def __init__(self):
+            self.values = []
+
+        def set(self, name, value):
+            self.values.append((name, value))
+
+    class Exports:
+        def __init__(self):
+            self.calls = []
+            self.node = ExportNode()
+
+        def create(self, *args):
+            self.calls.append(args)
+            return self.node
+
+    exports = Exports()
+    node = _create_legacy_data_export(exports, "data1", "dset1", "C:/tmp/result.txt")
+
+    assert node is exports.node
+    assert exports.calls == [("data1", "Data")]
+    assert exports.node.values == [("data", "dset1"), ("filename", "C:/tmp/result.txt")]
+
+
+def test_local_pdf_files_prioritizes_postprocessing_manual_for_export_queries(monkeypatch, tmp_path: Path):
+    from src.knowledge import embedded
+
+    class FakeProcessor:
+        def get_pdf_files(self):
+            return [
+                tmp_path / "COMSOL_Multiphysics" / "COMSOL_ReferenceManual.pdf",
+                tmp_path / "COMSOL_Multiphysics" / "COMSOL_PostprocessingAndVisualization.pdf",
+                tmp_path / "COMSOL_Multiphysics" / "COMSOL_ProgrammingReferenceManual.pdf",
+            ]
+
+        def get_module_name(self, _pdf_path):
+            return "COMSOL_Multiphysics"
+
+    files = embedded._local_pdf_files(FakeProcessor(), "image export plot", None)
+
+    assert files[0].name == "COMSOL_PostprocessingAndVisualization.pdf"
+
+
+def test_pdf_search_dependency_probe_does_not_import_embedding_modules(monkeypatch):
+    from src.knowledge import embedded
+
+    requested = []
+
+    def find_spec(name):
+        requested.append(name)
+        return object() if name == "fitz" else None
+
+    monkeypatch.setattr(embedded.importlib.util, "find_spec", find_spec)
+
+    assert embedded._pdf_search_ready() is True
+    assert requested == ["fitz"]

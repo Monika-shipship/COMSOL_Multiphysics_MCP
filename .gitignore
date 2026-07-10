@@ -7,3 +7,4 @@ comsol_models/clone_probe_source.mph
 comsol_models/matrix_heat_manual.mph
 comsol_models/matrix_heat_manual/
 comsol_models/round2_load.mph
+comsol_models/export_probe/
