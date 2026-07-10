@@ -1,9 +1,10 @@
 """Geometry tools for COMSOL MCP Server."""
 
 from typing import Optional, Sequence
+import re
 from mcp.server.fastmcp import FastMCP
 
-from ..comsol_compat import component_container
+from ..comsol_compat import component_container, is_legacy_model
 from .session import session_manager
 
 
@@ -39,10 +40,31 @@ def _resolve_geometry_name(available_names, java_geometries, requested_name: Opt
 def _next_feature_tag(features, prefix: str) -> str:
     """Generate a tag that works with both Python and Java feature lists."""
     try:
-        count = len(list(features.tags()))
+        tags = list(features.tags())
     except (AttributeError, TypeError):
-        count = len(features)
-    return f"{prefix}{count + 1}"
+        tags = [getattr(feature, "tag", lambda: "")() for feature in features]
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    numbers = [int(match.group(1)) for tag in tags if (match := pattern.match(str(tag)))]
+    return f"{prefix}{max(numbers, default=0) + 1}"
+
+
+def _create_legacy_circle(geometry, position: Sequence[float], radius: float) -> str:
+    """Create a circle through COMSOL 5.2a's Java geometry feature list."""
+    features = geometry.feature()
+    tag = _next_feature_tag(features, "c")
+    circle = features.create(tag, "Circle")
+    circle.set("pos", [str(value) for value in position])
+    circle.set("r", str(radius))
+    return tag
+
+
+def _create_legacy_union(geometry, input_objects: Sequence[str]) -> str:
+    """Create a union using COMSOL 5.2a's geometry selections."""
+    features = geometry.feature()
+    tag = _next_feature_tag(features, "uni")
+    union = features.create(tag, "Union")
+    union.selection("input").set(list(input_objects))
+    return tag
 
 
 def _get_geometry_node(model, geometry_name: Optional[str], component_name: str = "comp1"):
@@ -220,7 +242,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
                 "feature": {
                     "name": feature_node.name() if hasattr(feature_node, 'name') else feature_name,
                     "type": feature_type,
-                    "geometry": target_geom,
+                    "geometry": geometry_name or geom_node.tag(),
                 }
             }
         except Exception as e:
@@ -469,24 +491,29 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            geometries = model.geometries()
-            if not geometries:
-                return {"success": False, "error": "No geometry sequences found."}
-            
-            target_geom = geometry_name or geometries[0]
-            geom_node = model / "geometries" / target_geom
-            circle_node = geom_node.create("Circle")
-            
-            if len(position) == 2:
-                circle_node.property("pos", list(position))
-            circle_node.property("r", radius)
+            if is_legacy_model(model.java):
+                geom_node, error = _get_geometry_node(model, geometry_name)
+                if error:
+                    return {"success": False, "error": error}
+                circle_name = _create_legacy_circle(geom_node, position, radius)
+            else:
+                geometries = model.geometries()
+                if not geometries:
+                    return {"success": False, "error": "No geometry sequences found."}
+                target_geom = geometry_name or geometries[0]
+                geom_node = model / "geometries" / target_geom
+                circle_node = geom_node.create("Circle")
+                if len(position) == 2:
+                    circle_node.property("pos", list(position))
+                circle_node.property("r", radius)
+                circle_name = circle_node.name() if hasattr(circle_node, "name") else "Circle"
             
             return {
                 "success": True,
                 "feature": {
-                    "name": circle_node.name() if hasattr(circle_node, 'name') else "Circle",
+                    "name": circle_name,
                     "type": "Circle",
-                    "geometry": target_geom,
+                    "geometry": geometry_name or geom_node.tag(),
                     "position": list(position),
                     "radius": radius,
                 }
@@ -519,21 +546,27 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            geometries = model.geometries()
-            if not geometries:
-                return {"success": False, "error": "No geometry sequences found."}
-            
-            target_geom = geometry_name or geometries[0]
-            geom_node = model / "geometries" / target_geom
-            union_node = geom_node.create("Union")
-            union_node.property("input", list(input_objects))
+            if is_legacy_model(model.java):
+                geom_node, error = _get_geometry_node(model, geometry_name)
+                if error:
+                    return {"success": False, "error": error}
+                union_name = _create_legacy_union(geom_node, input_objects)
+            else:
+                geometries = model.geometries()
+                if not geometries:
+                    return {"success": False, "error": "No geometry sequences found."}
+                target_geom = geometry_name or geometries[0]
+                geom_node = model / "geometries" / target_geom
+                union_node = geom_node.create("Union")
+                union_node.property("input", list(input_objects))
+                union_name = union_node.name() if hasattr(union_node, "name") else "Union"
             
             return {
                 "success": True,
                 "feature": {
-                    "name": union_node.name() if hasattr(union_node, 'name') else "Union",
+                    "name": union_name,
                     "type": "Union",
-                    "geometry": target_geom,
+                    "geometry": geometry_name or geom_node.tag(),
                     "input_objects": list(input_objects),
                 }
             }
@@ -709,6 +742,20 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             }
         
         try:
+            if is_legacy_model(model.java):
+                geom, error = _get_geometry_node(model, geometry_name)
+                if error:
+                    return {"success": False, "error": error}
+                features = []
+                for tag in geom.feature().tags():
+                    feature = geom.feature(tag)
+                    features.append({"name": str(tag), "label": feature.label()})
+                return {
+                    "success": True,
+                    "geometry": geometry_name or geom.tag(),
+                    "features": features,
+                    "count": len(features),
+                }
             geometries = model.geometries()
             if not geometries:
                 return {"success": False, "error": "No geometry sequences found."}

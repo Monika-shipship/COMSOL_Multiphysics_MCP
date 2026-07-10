@@ -5,7 +5,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import mph
 
-from ..comsol_compat import component_containers
+from ..comsol_compat import component_containers, is_legacy_model
 from .session import session_manager
 from ..utils.versioning import (
     generate_version_path, 
@@ -15,6 +15,37 @@ from ..utils.versioning import (
     get_model_directory,
     MODELS_BASE_DIR
 )
+
+
+def _legacy_model_structure(java_model) -> dict[str, list[str]]:
+    """Inspect COMSOL 5.2a's top-level lists without MPh component access."""
+    return {
+        "components": ["comp1"],
+        "geometries": list(java_model.geom().tags()),
+        "physics": list(java_model.physics().tags()),
+        "multiphysics": list(java_model.multiphysics().tags()),
+        "materials": list(java_model.material().tags()),
+        "meshes": list(java_model.mesh().tags()),
+        "studies": list(java_model.study().tags()),
+        "solutions": list(java_model.sol().tags()),
+        "datasets": list(java_model.result().tags()),
+    }
+
+
+def _legacy_model_parameters(java_model) -> dict[str, dict[str, str]]:
+    """Read parameters from COMSOL 5.2a's top-level parameter API."""
+    params = java_model.param()
+    return {
+        name: {"value": params.get(name), "description": params.descr(name)}
+        for name in params.varnames()
+    }
+
+
+def _clone_legacy_java_model(java_model, source_name: str, clone_name: str, path: str, load_copy):
+    """Save a legacy model and create an independent Java copy from that file."""
+    java_model.save(path)
+    java_model.label(source_name)
+    return load_copy(clone_name, path)
 
 
 def register_model_tools(mcp: FastMCP) -> None:
@@ -363,9 +394,25 @@ def register_model_tools(mcp: FastMCP) -> None:
             if client is None:
                 return {"success": False, "error": "Client not available."}
             
-            java_model = model.java.createCopy()
-            if new_name:
-                java_model.label(new_name)
+            clone_label = new_name or f"{model.name()}_copy"
+            if is_legacy_model(model.java):
+                from jpype import JClass
+
+                clone_dir = MODELS_BASE_DIR / "_mcp_clone_cache"
+                clone_dir.mkdir(parents=True, exist_ok=True)
+                clone_path = clone_dir / f"{clone_label}.mph"
+                model_util = JClass("com.comsol.model.util.ModelUtil")
+                java_model = _clone_legacy_java_model(
+                    model.java,
+                    model_name or model.name(),
+                    clone_label,
+                    str(clone_path),
+                    model_util.loadCopy,
+                )
+                java_model.label(clone_label)
+            else:
+                java_model = model.java.createCopy()
+                java_model.label(clone_label)
             
             cloned_model = mph.Model(java_model)
             clone_name = session_manager.add_model(cloned_model)
@@ -430,28 +477,45 @@ def register_model_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            info = {
-                "name": model.name(),
-                "file": model.file(),
-                "comsol_version": model.version(),
-                "parameters": dict(model.parameters()) if model.parameters() else {},
-                "functions": model.functions(),
-                "components": model.components(),
-                "geometries": model.geometries(),
-                "selections": model.selections(),
-                "physics": model.physics(),
-                "multiphysics": model.multiphysics(),
-                "materials": model.materials(),
-                "meshes": model.meshes(),
-                "studies": model.studies(),
-                "solutions": model.solutions(),
-                "datasets": model.datasets(),
-                "plots": model.plots(),
-                "exports": model.exports(),
-                "modules": model.modules(),
-            }
+            if is_legacy_model(model.java):
+                info = {
+                    "name": model.name(),
+                    "file": model.file(),
+                    "comsol_version": model.version(),
+                    "parameters": _legacy_model_parameters(model.java),
+                    "functions": model.functions(),
+                    "selections": model.selections(),
+                    "plots": model.plots(),
+                    "exports": model.exports(),
+                    "modules": model.modules(),
+                    **_legacy_model_structure(model.java),
+                }
+            else:
+                info = {
+                    "name": model.name(),
+                    "file": model.file(),
+                    "comsol_version": model.version(),
+                    "parameters": dict(model.parameters()) if model.parameters() else {},
+                    "functions": model.functions(),
+                    "components": model.components(),
+                    "geometries": model.geometries(),
+                    "selections": model.selections(),
+                    "physics": model.physics(),
+                    "multiphysics": model.multiphysics(),
+                    "materials": model.materials(),
+                    "meshes": model.meshes(),
+                    "studies": model.studies(),
+                    "solutions": model.solutions(),
+                    "datasets": model.datasets(),
+                    "plots": model.plots(),
+                    "exports": model.exports(),
+                    "modules": model.modules(),
+                }
             
-            problems = model.problems()
+            try:
+                problems = model.problems()
+            except Exception:
+                problems = []
             if problems:
                 info["problems"] = problems
             

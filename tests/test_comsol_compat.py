@@ -323,3 +323,254 @@ def test_next_geometry_feature_tag_uses_java_tags():
             return ["r1", "r2"]
 
     assert _next_feature_tag(Features(), "r") == "r3"
+
+
+def test_next_geometry_feature_tag_ignores_unrelated_automatic_features():
+    from src.tools.geometry import _next_feature_tag
+
+    class Features:
+        def tags(self):
+            return ["fin"]
+
+    assert _next_feature_tag(Features(), "blk") == "blk1"
+
+
+def test_next_geometry_feature_tag_converts_java_string_like_tags():
+    from src.tools.geometry import _next_feature_tag
+
+    class JavaString:
+        def __str__(self):
+            return "blk2"
+
+    class Features:
+        def tags(self):
+            return [JavaString()]
+
+    assert _next_feature_tag(Features(), "blk") == "blk3"
+
+
+def test_physics_feature_info_uses_legacy_feature_tags():
+    from src.tools.physics import _physics_feature_info
+
+    class Feature:
+        def __init__(self, label):
+            self._label = label
+
+        def label(self):
+            return self._label
+
+    class Features:
+        def tags(self):
+            return ["temp1", "temp2"]
+
+        def get(self, tag):
+            return Feature(f"Label {tag}")
+
+    assert _physics_feature_info(Features()) == [
+        {"name": "temp1", "label": "Label temp1"},
+        {"name": "temp2", "label": "Label temp2"},
+    ]
+
+
+def test_resolve_legacy_multiphysics_maps_thermal_stress_to_expansion():
+    from src.tools.physics import _resolve_legacy_multiphysics
+
+    class Geometry:
+        def getSDim(self):
+            return 3
+
+    assert _resolve_legacy_multiphysics("ThermalStress", "geom1", Geometry()) == (
+        "ThermalExpansion",
+        "geom1",
+        3,
+    )
+
+
+def test_resolve_results_dataset_uses_first_available_dataset():
+    from src.tools.results import _resolve_dataset
+
+    class Model:
+        def datasets(self):
+            return ["Dataset 1"]
+
+    assert _resolve_dataset(Model(), None) == "Dataset 1"
+    assert _resolve_dataset(Model(), "custom") == "custom"
+
+
+def test_legacy_model_inspection_reads_top_level_java_tags():
+    from src.tools.model import _legacy_model_structure
+
+    class List:
+        def __init__(self, tags):
+            self._tags = tags
+
+        def tags(self):
+            return self._tags
+
+    class JavaModel:
+        def geom(self):
+            return List(["geom1"])
+
+        def physics(self):
+            return List(["ht"])
+
+        def material(self):
+            return List(["mat1"])
+
+        def mesh(self):
+            return List(["mesh1"])
+
+        def study(self):
+            return List(["std1"])
+
+        def sol(self):
+            return List(["sol1"])
+
+        def result(self):
+            return List(["pg1"])
+
+        def multiphysics(self):
+            return List(["te1"])
+
+    structure = _legacy_model_structure(JavaModel())
+    assert structure["components"] == ["comp1"]
+    assert structure["geometries"] == ["geom1"]
+    assert structure["physics"] == ["ht"]
+    assert structure["studies"] == ["std1"]
+
+
+def test_clone_legacy_model_saves_source_then_restores_its_label():
+    from src.tools.model import _clone_legacy_java_model
+
+    class JavaModel:
+        def __init__(self):
+            self.saved_path = None
+            self.label_value = None
+
+        def save(self, path):
+            self.saved_path = path
+
+        def label(self, value):
+            self.label_value = value
+
+    java_model = JavaModel()
+    loaded = []
+    clone = _clone_legacy_java_model(
+        java_model,
+        "source",
+        "clone",
+        "C:/tmp/source.mph",
+        lambda name, path: loaded.append((name, path)) or "clone-java",
+    )
+
+    assert clone == "clone-java"
+    assert java_model.saved_path == "C:/tmp/source.mph"
+    assert java_model.label_value == "source"
+    assert loaded == [("clone", "C:/tmp/source.mph")]
+
+
+def test_legacy_model_parameters_use_top_level_param_api():
+    from src.tools.model import _legacy_model_parameters
+
+    class Params:
+        def varnames(self):
+            return ["L"]
+
+        def get(self, name):
+            assert name == "L"
+            return "1[m]"
+
+        def descr(self, name):
+            assert name == "L"
+            return "Length"
+
+    class JavaModel:
+        def param(self):
+            return Params()
+
+    assert _legacy_model_parameters(JavaModel()) == {
+        "L": {"value": "1[m]", "description": "Length"}
+    }
+
+
+def test_create_legacy_circle_feature_uses_java_geometry_features():
+    from src.tools.geometry import _create_legacy_circle
+
+    class Circle:
+        def __init__(self):
+            self.properties = []
+
+        def set(self, name, value):
+            self.properties.append((name, value))
+
+    class Features:
+        def __init__(self):
+            self.circle = Circle()
+            self.calls = []
+
+        def tags(self):
+            return ["fin"]
+
+        def create(self, *args):
+            self.calls.append(args)
+            return self.circle
+
+    class Geometry:
+        def __init__(self):
+            self.features = Features()
+
+        def feature(self):
+            return self.features
+
+    geometry = Geometry()
+    assert _create_legacy_circle(geometry, [0.5, 0.5], 0.2) == "c1"
+    assert geometry.features.calls == [("c1", "Circle")]
+    assert geometry.features.circle.properties == [("pos", ["0.5", "0.5"]), ("r", "0.2")]
+
+
+def test_create_legacy_union_feature_selects_input_tags():
+    from src.tools.geometry import _create_legacy_union
+
+    class Selection:
+        def __init__(self):
+            self.value = None
+
+        def set(self, value):
+            self.value = value
+
+    class Union:
+        def __init__(self):
+            self.input = Selection()
+
+        def selection(self, name):
+            assert name == "input"
+            return self.input
+
+    class Features:
+        def __init__(self):
+            self.union = Union()
+
+        def tags(self):
+            return ["r1", "c1"]
+
+        def create(self, tag, feature_type):
+            assert (tag, feature_type) == ("uni1", "Union")
+            return self.union
+
+    class Geometry:
+        def __init__(self):
+            self.features = Features()
+
+        def feature(self):
+            return self.features
+
+    geometry = Geometry()
+    assert _create_legacy_union(geometry, ["r1", "c1"]) == "uni1"
+    assert geometry.features.union.input.value == ["r1", "c1"]
+
+
+def test_legacy_inlet_property_uses_comsol_52a_name():
+    from src.tools.physics import _boundary_property_name
+
+    assert _boundary_property_name("Inlet", "U0", legacy=True) == "U0in"
+    assert _boundary_property_name("Outlet", "p0", legacy=True) == "p0"

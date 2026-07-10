@@ -7,6 +7,14 @@ from mcp.server.fastmcp import FastMCP
 from .session import session_manager
 
 
+def _resolve_dataset(model, dataset: Optional[str]) -> Optional[str]:
+    """Choose the current model's first dataset when no explicit tag is supplied."""
+    if dataset:
+        return dataset
+    datasets = model.datasets()
+    return datasets[0] if datasets else None
+
+
 def register_results_tools(mcp: FastMCP) -> None:
     """Register results tools with the MCP server."""
     
@@ -143,6 +151,9 @@ def register_results_tools(mcp: FastMCP) -> None:
             }
         
         try:
+            dataset = _resolve_dataset(model, dataset)
+            if not dataset:
+                return {"success": False, "error": "No solution dataset is available."}
             indices, values = model.inner(dataset)
             
             return {
@@ -178,6 +189,9 @@ def register_results_tools(mcp: FastMCP) -> None:
             }
         
         try:
+            dataset = _resolve_dataset(model, dataset)
+            if not dataset:
+                return {"success": False, "error": "No solution dataset is available."}
             indices, values = model.outer(dataset)
             
             return {

@@ -67,6 +67,30 @@ def _create_boundary_feature(physics, geometry, tag: str, boundary_condition: st
     return physics.create(tag, feature_type)
 
 
+def _boundary_property_name(boundary_condition: str, property_name: str, legacy: bool) -> str:
+    """Map boundary properties whose COMSOL 5.2a names differ from newer APIs."""
+    if legacy and boundary_condition == "Inlet" and property_name == "U0":
+        return "U0in"
+    return property_name
+
+
+def _physics_feature_info(features) -> list[dict[str, str]]:
+    """Return feature tags and labels from the Java feature list."""
+    result = []
+    for tag in features.tags():
+        feature = features.get(tag)
+        result.append({"name": tag, "label": feature.label()})
+    return result
+
+
+def _resolve_legacy_multiphysics(coupling_type: str, geometry_tag: str, geometry) -> tuple[str, str, int]:
+    """Map MCP-friendly coupling names to COMSOL 5.2a Java API names."""
+    coupling_names = {
+        "ThermalStress": "ThermalExpansion",
+    }
+    return coupling_names.get(coupling_type, coupling_type), geometry_tag, int(geometry.getSDim())
+
+
 def _find_physics_java(jm, physics_name):
     """Look up a physics node by label or tag across all components."""
     for comp in component_containers(jm):
@@ -604,7 +628,20 @@ def register_physics_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            coupling_node = model.create("multiphysics", coupling_type)
+            if is_legacy_model(model.java):
+                geometry_tag = first_geometry_tag(model.java)
+                if not geometry_tag:
+                    return {"success": False, "error": "Create a geometry before adding a multiphysics coupling."}
+                coupling_name, geometry_tag, dimension = _resolve_legacy_multiphysics(
+                    coupling_type,
+                    geometry_tag,
+                    model.java.geom(geometry_tag),
+                )
+                coupling_node = model.java.multiphysics().create(
+                    _make_tag("cpl"), coupling_name, geometry_tag, dimension
+                )
+            else:
+                coupling_node = model.create("multiphysics", coupling_type)
             
             return {
                 "success": True,
@@ -640,20 +677,22 @@ def register_physics_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            physics_interfaces = model.physics()
-            if physics_name not in physics_interfaces:
+            physics_java = _find_physics_java(model.java, physics_name)
+            if physics_java is None:
                 return {"success": False, "error": f"Physics interface not found: {physics_name}"}
-            
-            physics_node = model / "physics" / physics_name
-            features = []
-            
-            for child in physics_node.children():
-                feat_info = {"name": child.name()}
-                try:
-                    feat_info["type"] = child.type() if hasattr(child, 'type') else "unknown"
-                except Exception:
-                    pass
-                features.append(feat_info)
+
+            if is_legacy_model(model.java):
+                features = _physics_feature_info(physics_java.feature())
+            else:
+                physics_node = model / "physics" / physics_name
+                features = []
+                for child in physics_node.children():
+                    feat_info = {"name": child.name()}
+                    try:
+                        feat_info["type"] = child.type() if hasattr(child, 'type') else "unknown"
+                    except Exception:
+                        pass
+                    features.append(feat_info)
             
             return {
                 "success": True,
@@ -687,12 +726,17 @@ def register_physics_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            physics_interfaces = model.physics()
-            if physics_name not in physics_interfaces:
-                return {"success": False, "error": f"Physics interface not found: {physics_name}"}
-            
-            physics_node = model / "physics" / physics_name
-            model.remove(physics_node)
+            if is_legacy_model(model.java):
+                physics_java = _find_physics_java(model.java, physics_name)
+                if physics_java is None:
+                    return {"success": False, "error": f"Physics interface not found: {physics_name}"}
+                model.java.physics().remove(physics_java.tag())
+            else:
+                physics_interfaces = model.physics()
+                if physics_name not in physics_interfaces:
+                    return {"success": False, "error": f"Physics interface not found: {physics_name}"}
+                physics_node = model / "physics" / physics_name
+                model.remove(physics_node)
             
             return {
                 "success": True,
@@ -737,10 +781,9 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
             geom_tag = geometry_name
             if not geom_tag:
-                geoms = comp.geom()
-                if geoms.size() == 0:
+                geom_tag = first_geometry_tag(jm)
+                if not geom_tag:
                     return {"success": False, "error": "No geometries in component."}
-                geom_tag = geoms[0].tag()
 
             geom = comp.geom(geom_tag)
             geom.run()
@@ -795,7 +838,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
         
         try:
             # Get geometry boundaries
-            boundaries_info = geometry_get_boundaries(None, model_name)
+            boundaries_info = geometry_get_boundaries(model_name=model_name)
             if not boundaries_info.get("success"):
                 return boundaries_info
             
@@ -860,24 +903,21 @@ def register_physics_tools(mcp: FastMCP) -> None:
         try:
             jm = model.java
             
-            # Find physics in component
-            physics_interfaces = model.physics()
-            if physics_name not in physics_interfaces:
-                return {"success": False, "error": f"Physics '{physics_name}' not found. Available: {physics_interfaces}"}
-            
-            # Get component and physics
             physics_java = _find_physics_java(jm, physics_name)
 
             if physics_java is None:
                 return {"success": False, "error": f"Could not find physics interface: {physics_name}"}
 
+            legacy = is_legacy_model(jm)
+            geometry = jm.geom(first_geometry_tag(jm)) if legacy else None
+
             results = {"inlets": [], "outlets": []}
 
             for i, boundary in enumerate(inlet_boundaries):
                 inlet_tag = _make_tag("inl")
-                inlet = physics_java.create(inlet_tag, 'InletBoundary')
+                inlet = _create_boundary_feature(physics_java, geometry, inlet_tag, "Inlet", legacy)
                 inlet.selection().set([int(boundary)])
-                inlet.set('U0', inlet_velocity)
+                inlet.set(_boundary_property_name("Inlet", "U0", legacy), inlet_velocity)
                 inlet.label(f'Inlet {i+1} (Boundary {boundary})')
                 results["inlets"].append({
                     "tag": inlet_tag,
@@ -887,7 +927,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
             
             for i, boundary in enumerate(outlet_boundaries):
                 outlet_tag = _make_tag("out")
-                outlet = physics_java.create(outlet_tag, 'OutletBoundary')
+                outlet = _create_boundary_feature(physics_java, geometry, outlet_tag, "Outlet", legacy)
                 outlet.selection().set([int(boundary)])
                 outlet.set('p0', outlet_pressure)
                 outlet.label(f'Outlet {i+1} (Boundary {boundary})')
@@ -936,7 +976,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            boundaries_info = geometry_get_boundaries(None, model_name)
+            boundaries_info = geometry_get_boundaries(model_name=model_name)
             if not boundaries_info.get("success"):
                 return boundaries_info
             
@@ -1014,20 +1054,19 @@ def register_physics_tools(mcp: FastMCP) -> None:
         try:
             jm = model.java
 
-            physics_interfaces = model.physics()
-            if physics_name not in physics_interfaces:
-                return {"success": False, "error": f"Physics '{physics_name}' not found. Available: {physics_interfaces}"}
-
             physics_java = _find_physics_java(jm, physics_name)
 
             if physics_java is None:
                 return {"success": False, "error": f"Could not find physics interface: {physics_name}"}
 
+            legacy = is_legacy_model(jm)
+            geometry = jm.geom(first_geometry_tag(jm)) if legacy else None
+
             results = {"heat_flux": [], "temperature": [], "convection": []}
 
             for i, boundary in enumerate(heat_flux_boundaries):
                 tag = _make_tag("hf")
-                bc = physics_java.create(tag, 'HeatFluxBoundary')
+                bc = _create_boundary_feature(physics_java, geometry, tag, "HeatFlux", legacy)
                 bc.selection().set([int(boundary)])
                 bc.set('q0', heat_flux_value)
                 bc.label(f'Heat Flux {i+1} (Boundary {boundary})')
@@ -1039,7 +1078,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
             
             for i, boundary in enumerate(temperature_boundaries):
                 tag = _make_tag("temp")
-                bc = physics_java.create(tag, 'TemperatureBoundary')
+                bc = _create_boundary_feature(physics_java, geometry, tag, "Temperature", legacy)
                 bc.selection().set([int(boundary)])
                 bc.set('T0', temperature_value)
                 bc.label(f'Temperature {i+1} (Boundary {boundary})')
@@ -1051,7 +1090,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
             
             for i, boundary in enumerate(convection_boundaries):
                 tag = _make_tag("conv")
-                bc = physics_java.create(tag, 'ConvectiveHeatFlux')
+                bc = _create_boundary_feature(physics_java, geometry, tag, "ConvectiveHeatFlux", legacy)
                 bc.selection().set([int(boundary)])
                 bc.set('h', convection_coeff)
                 bc.set('Text', ambient_temp)

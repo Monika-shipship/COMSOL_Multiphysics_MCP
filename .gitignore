@@ -2,3 +2,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 comsol_models/codex_heat_validation/
+comsol_models/_mcp_clone_cache/
+comsol_models/clone_probe_source.mph
+comsol_models/matrix_heat_manual.mph
+comsol_models/matrix_heat_manual/
+comsol_models/round2_load.mph
