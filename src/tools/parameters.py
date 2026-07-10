@@ -3,7 +3,16 @@
 from typing import Optional, Union
 from mcp.server.fastmcp import FastMCP
 
+from ..comsol_compat import is_legacy_model
 from .session import session_manager
+
+
+def _create_legacy_parametric_sweep(study, tag: str, parameter_name: str, values: list[str]) -> str:
+    """Create a COMSOL 5.2a Parametric study feature."""
+    sweep = study.feature().create(tag, "Parametric")
+    sweep.set("pname", [parameter_name])
+    sweep.set("plist", values)
+    return tag
 
 
 def register_parameter_tools(mcp: FastMCP) -> None:
@@ -157,6 +166,32 @@ def register_parameter_tools(mcp: FastMCP) -> None:
             }
         
         try:
+            if is_legacy_model(model.java):
+                study_tags = [str(tag) for tag in model.java.study().tags()]
+                if not study_tags:
+                    return {"success": False, "error": "No studies found in model."}
+                target_study = study_name or study_tags[0]
+                if target_study not in study_tags:
+                    return {"success": False, "error": f"Study not found: {target_study}"}
+                feature_tags = {str(tag) for tag in model.java.study(target_study).feature().tags()}
+                sweep_tag = "param"
+                suffix = 1
+                while sweep_tag in feature_tags:
+                    suffix += 1
+                    sweep_tag = f"param{suffix}"
+                _create_legacy_parametric_sweep(
+                    model.java.study(target_study),
+                    sweep_tag,
+                    parameter_name,
+                    [str(value) for value in values],
+                )
+                return {
+                    "success": True,
+                    "study": target_study,
+                    "parameter": parameter_name,
+                    "values": values,
+                    "sweep_node": sweep_tag,
+                }
             studies = model.studies()
             if not studies:
                 return {"success": False, "error": "No studies found in model."}

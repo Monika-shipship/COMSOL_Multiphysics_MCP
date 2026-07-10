@@ -574,3 +574,35 @@ def test_legacy_inlet_property_uses_comsol_52a_name():
 
     assert _boundary_property_name("Inlet", "U0", legacy=True) == "U0in"
     assert _boundary_property_name("Outlet", "p0", legacy=True) == "p0"
+
+
+def test_create_legacy_parametric_sweep_uses_study_feature_api():
+    from src.tools.parameters import _create_legacy_parametric_sweep
+
+    class Sweep:
+        def __init__(self):
+            self.values = []
+
+        def set(self, name, value):
+            self.values.append((name, value))
+
+    class Features:
+        def __init__(self):
+            self.sweep = Sweep()
+            self.calls = []
+
+        def create(self, *args):
+            self.calls.append(args)
+            return self.sweep
+
+    class Study:
+        def __init__(self):
+            self.features = Features()
+
+        def feature(self):
+            return self.features
+
+    study = Study()
+    assert _create_legacy_parametric_sweep(study, "param", "a", ["1", "2"]) == "param"
+    assert study.features.calls == [("param", "Parametric")]
+    assert study.features.sweep.values == [("pname", ["a"]), ("plist", ["1", "2"])]
