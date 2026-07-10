@@ -3,17 +3,80 @@
 from typing import Optional, Sequence
 from mcp.server.fastmcp import FastMCP
 
-from ..comsol_compat import component_container, component_containers
+from ..comsol_compat import (
+    component_container,
+    component_containers,
+    create_physics_interface,
+    first_geometry_tag,
+    geometry_entity_counts,
+    is_legacy_model,
+)
 from .session import session_manager
 
 _tag_counter = {}
 
 
+THERMAL_MATERIAL_PROPERTIES = {
+    "silicon": {
+        "thermalconductivity": "130[W/(m*K)]",
+        "density": "2330[kg/m^3]",
+        "heatcapacity": "700[J/(kg*K)]",
+    },
+    "copper": {
+        "thermalconductivity": "400[W/(m*K)]",
+        "density": "8960[kg/m^3]",
+        "heatcapacity": "385[J/(kg*K)]",
+    },
+    "water": {
+        "thermalconductivity": "0.6[W/(m*K)]",
+        "density": "1000[kg/m^3]",
+        "heatcapacity": "4180[J/(kg*K)]",
+    },
+    "air": {
+        "thermalconductivity": "0.026[W/(m*K)]",
+        "density": "1.2[kg/m^3]",
+        "heatcapacity": "1005[J/(kg*K)]",
+    },
+}
+
+
+def _set_material_properties(material, properties: dict[str, str]) -> dict[str, str]:
+    """Write scalar material properties to COMSOL's default property group."""
+    group = material.propertyGroup("def")
+    for name, value in properties.items():
+        group.set(name, [value])
+    return properties.copy()
+
+
+BOUNDARY_FEATURE_TYPES = {
+    "Temperature": "TemperatureBoundary",
+    "HeatFlux": "HeatFluxBoundary",
+    "ElectricPotential": "ElectricPotentialBoundary",
+    "SurfaceChargeDensity": "SurfaceChargeDensity",
+    "Inlet": "InletBoundary",
+    "Outlet": "OutletBoundary",
+}
+
+
+def _create_boundary_feature(physics, geometry, tag: str, boundary_condition: str, legacy: bool):
+    """Create a boundary condition using the physics API for the active COMSOL generation."""
+    feature_type = BOUNDARY_FEATURE_TYPES.get(boundary_condition, boundary_condition)
+    if legacy:
+        boundary_dimension = int(geometry.getSDim()) - 1
+        return physics.feature().create(tag, feature_type, boundary_dimension)
+    return physics.create(tag, feature_type)
+
+
 def _find_physics_java(jm, physics_name):
     """Look up a physics node by label or tag across all components."""
     for comp in component_containers(jm):
-        for j in range(comp.physics().size()):
-            p = comp.physics().get(j)
+        physics_list = comp.physics()
+        try:
+            tags = list(physics_list.tags())
+        except (AttributeError, TypeError):
+            tags = list(range(physics_list.size()))
+        for tag in tags:
+            p = physics_list.get(tag)
             if p.label() == physics_name or p.tag() == physics_name:
                 return p
     return None
@@ -152,16 +215,14 @@ def register_physics_tools(mcp: FastMCP) -> None:
         try:
             jm = model.java
 
-            if component_name:
-                comp = component_container(jm, component_name)
-            else:
-                comp = component_containers(jm)[0]
-
-            if comp is None:
-                return {"success": False, "error": f"Component not found: {component_name}"}
-
             tag = physics_type.replace(" ", "_").lower()
-            physics_java = comp.physics().create(tag, physics_type)
+            physics_java = create_physics_interface(
+                jm,
+                tag,
+                physics_type,
+                first_geometry_tag(jm),
+                component_name or "comp1",
+            )
 
             return {
                 "success": True,
@@ -169,7 +230,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
                     "name": physics_java.label() if hasattr(physics_java, 'label') else physics_type,
                     "type": physics_type,
                     "tag": tag,
-                    "component": comp.tag(),
+                    "component": component_name or "comp1",
                 }
             }
         except Exception as e:
@@ -199,8 +260,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = component_containers(jm)[0]
-            physics_java = comp.physics().create("es", "Electrostatics")
+            physics_java = create_physics_interface(jm, "es", "Electrostatics", first_geometry_tag(jm))
 
             if domain_selection:
                 try:
@@ -244,8 +304,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = component_containers(jm)[0]
-            physics_java = comp.physics().create("solid", "SolidMechanics")
+            physics_java = create_physics_interface(jm, "solid", "SolidMechanics", first_geometry_tag(jm))
 
             if domain_selection:
                 try:
@@ -289,8 +348,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = component_containers(jm)[0]
-            physics_java = comp.physics().create("ht", "HeatTransfer")
+            physics_java = create_physics_interface(jm, "ht", "HeatTransfer", first_geometry_tag(jm))
 
             if domain_selection:
                 try:
@@ -334,8 +392,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
 
         try:
             jm = model.java
-            comp = component_containers(jm)[0]
-            physics_java = comp.physics().create("spf", "LaminarFlow")
+            physics_java = create_physics_interface(jm, "spf", "LaminarFlow", first_geometry_tag(jm))
 
             if domain_selection:
                 try:
@@ -412,7 +469,14 @@ def register_physics_tools(mcp: FastMCP) -> None:
                 return {"success": False, "error": f"Physics interface not found: {physics_name}"}
 
             tag = _make_tag(boundary_condition.lower())
-            bc = physics_java.create(tag, boundary_condition)
+            legacy = is_legacy_model(jm)
+            geometry = None
+            if legacy:
+                geometry_tag = first_geometry_tag(jm)
+                if not geometry_tag:
+                    return {"success": False, "error": "No geometry sequence found for boundary condition."}
+                geometry = jm.geom(geometry_tag)
+            bc = _create_boundary_feature(physics_java, geometry, tag, boundary_condition, legacy)
             bc.selection().set([int(b) for b in boundary_selection])
 
             if properties:
@@ -442,6 +506,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
         physics_name: str,
         material_name: str,
         domain_selection: Optional[Sequence[int]] = None,
+        properties: Optional[dict[str, str]] = None,
         model_name: Optional[str] = None
     ) -> dict:
         """
@@ -454,6 +519,9 @@ def register_physics_tools(mcp: FastMCP) -> None:
             physics_name: Name of the physics interface
             material_name: Name of the material (e.g. "Silicon", "Steel AISI 4340", "Copper")
             domain_selection: Domain numbers (default: all domains for this physics)
+            properties: Optional COMSOL material properties. For example,
+                {"thermalconductivity": "1[W/(m*K)]"}. Common heat-transfer
+                materials use built-in default values when this argument is omitted.
             model_name: Model name (default: current model)
 
         Returns:
@@ -488,13 +556,19 @@ def register_physics_tools(mcp: FastMCP) -> None:
             if domain_selection:
                 mat_node.selection().set([int(d) for d in domain_selection])
 
+            material_properties = properties or THERMAL_MATERIAL_PROPERTIES.get(material_name.casefold())
+            applied_properties = {}
+            if material_properties:
+                applied_properties = _set_material_properties(mat_node, material_properties)
+
             return {
                 "success": True,
                 "material": material_name,
                 "physics": physics_name,
                 "domain_selection": list(domain_selection) if domain_selection else "all",
+                "properties": applied_properties,
                 "message": f"Material '{material_name}' assigned to physics '{physics_name}'",
-                "warning": "Material node has no physical properties. Set properties manually in COMSOL GUI.",
+                "warning": None if applied_properties else "No properties were supplied for this material. Set properties before solving.",
             }
         except Exception as e:
             return {"success": False, "error": f"Failed to set material: {str(e)}"}
@@ -671,8 +745,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
             geom = comp.geom(geom_tag)
             geom.run()
 
-            nboundary = geom.getNboundary()
-            ndomain = geom.getNdomain()
+            nboundary, ndomain = geometry_entity_counts(geom)
 
             boundaries = []
             for i in range(1, nboundary + 1):

@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+comsol_models/codex_heat_validation/

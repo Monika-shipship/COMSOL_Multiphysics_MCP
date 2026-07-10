@@ -36,6 +36,15 @@ def _resolve_geometry_name(available_names, java_geometries, requested_name: Opt
     return None
 
 
+def _next_feature_tag(features, prefix: str) -> str:
+    """Generate a tag that works with both Python and Java feature lists."""
+    try:
+        count = len(list(features.tags()))
+    except (AttributeError, TypeError):
+        count = len(features)
+    return f"{prefix}{count + 1}"
+
+
 def _get_geometry_node(model, geometry_name: Optional[str], component_name: str = "comp1"):
     """Helper to get geometry node via Java API.
     
@@ -252,7 +261,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if error:
                 return {"success": False, "error": error}
             
-            feat_name = feature_name or f"blk{len(geom.feature())+1}"
+            feat_name = feature_name or _next_feature_tag(geom.feature(), "blk")
             block = geom.feature().create(feat_name, "Block")
             
             block.set("pos", [str(p) for p in position])
@@ -307,7 +316,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if error:
                 return {"success": False, "error": error}
             
-            feat_name = feature_name or f"cyl{len(geom.feature())+1}"
+            feat_name = feature_name or _next_feature_tag(geom.feature(), "cyl")
             cyl = geom.feature().create(feat_name, "Cylinder")
             
             cyl.set("pos", [str(p) for p in position])
@@ -362,7 +371,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if error:
                 return {"success": False, "error": error}
             
-            feat_name = feature_name or f"sph{len(geom.feature())+1}"
+            feat_name = feature_name or _next_feature_tag(geom.feature(), "sph")
             sphere = geom.feature().create(feat_name, "Sphere")
             
             sphere.set("pos", [str(p) for p in position])
@@ -415,7 +424,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if error:
                 return {"success": False, "error": error}
             
-            feat_name = feature_name or f"r{len(geom.feature())+1}"
+            feat_name = feature_name or _next_feature_tag(geom.feature(), "r")
             rect = geom.feature().create(feat_name, "Rectangle")
             
             rect.set("pos", [str(p) for p in position])
@@ -566,7 +575,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if error:
                 return {"success": False, "error": error}
             
-            feat_name = feature_name or f"dif{len(geom.feature())+1}"
+            feat_name = feature_name or _next_feature_tag(geom.feature(), "dif")
             diff = geom.feature().create(feat_name, "Difference")
             
             diff.selection("input").set([input_object])

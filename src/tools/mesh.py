@@ -3,7 +3,16 @@
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
+from ..comsol_compat import first_geometry_tag, is_legacy_model
 from .session import session_manager
+
+
+def _create_legacy_mesh(model_java, mesh_name: str, geometry_name: str):
+    """Create and run an automatic mesh using COMSOL 5.2a's top-level API."""
+    mesh = model_java.mesh().create(mesh_name, geometry_name)
+    mesh.automatic(True)
+    mesh.run()
+    return mesh
 
 
 def register_mesh_tools(mcp: FastMCP) -> None:
@@ -62,6 +71,22 @@ def register_mesh_tools(mcp: FastMCP) -> None:
             }
         
         try:
+            jm = model.java
+            if is_legacy_model(jm):
+                mesh_tags = list(jm.mesh().tags())
+                target = mesh_name or (mesh_tags[0] if mesh_tags else "mesh1")
+                if target in mesh_tags:
+                    jm.mesh(target).run()
+                else:
+                    geometry_name = first_geometry_tag(jm)
+                    if not geometry_name:
+                        return {"success": False, "error": "No geometry sequence found. Create and build geometry first."}
+                    _create_legacy_mesh(jm, target, geometry_name)
+                return {
+                    "success": True,
+                    "mesh": target,
+                    "message": f"Mesh created: {target}",
+                }
             model.mesh(mesh_name)
             return {
                 "success": True,

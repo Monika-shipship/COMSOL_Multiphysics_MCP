@@ -1,5 +1,7 @@
 """Basic tests for COMSOL MCP Server."""
 
+from pathlib import Path
+
 import pytest
 
 
@@ -23,10 +25,13 @@ class TestVersioning:
     
     def test_generate_version_path(self):
         from src.utils.versioning import generate_version_path
+        from src.utils.versioning import get_model_directory
         
         result = generate_version_path("/path/to/model.mph")
-        assert "/path/to/model_" in result
-        assert result.endswith(".mph")
+        result_path = Path(result)
+        assert result_path.parent == get_model_directory("model")
+        assert result_path.name.startswith("model_")
+        assert result_path.suffix == ".mph"
     
     def test_parse_version_info_valid(self):
         from src.utils.versioning import parse_version_info

@@ -24,6 +24,15 @@ def component_container(model_java: Any, component_name: str = "comp1") -> Any:
         return model_java
 
 
+def is_legacy_model(model_java: Any) -> bool:
+    """Return whether the model exposes COMSOL 5.2a's top-level API."""
+    try:
+        model_java.component()
+    except AttributeError:
+        return True
+    return False
+
+
 def component_containers(model_java: Any) -> list[Any]:
     """Return all component containers, including a legacy model container."""
     try:
@@ -31,6 +40,42 @@ def component_containers(model_java: Any) -> list[Any]:
     except AttributeError:
         return [model_java]
     return [components.get(index) for index in range(components.size())]
+
+
+def geometry_entity_counts(geometry: Any) -> tuple[int, int]:
+    """Return boundary and domain counts across COMSOL Java API generations."""
+    try:
+        boundaries = geometry.getNBoundaries()
+        domains = geometry.getNDomains()
+    except AttributeError:
+        boundaries = geometry.getNboundary()
+        domains = geometry.getNdomain()
+    return int(boundaries), int(domains)
+
+
+def first_geometry_tag(model_java: Any) -> str | None:
+    """Return the first top-level geometry tag for a legacy model."""
+    try:
+        tags = list(model_java.geom().tags())
+    except (AttributeError, TypeError):
+        return None
+    return tags[0] if tags else None
+
+
+def create_physics_interface(
+    model_java: Any,
+    tag: str,
+    physics_type: str,
+    geometry_tag: str | None = None,
+    component_name: str = "comp1",
+) -> Any:
+    """Create a physics interface using the model shape required by the API version."""
+    if is_legacy_model(model_java):
+        geometry_tag = geometry_tag or first_geometry_tag(model_java)
+        if not geometry_tag:
+            raise ValueError("Create and build a geometry before adding physics in COMSOL 5.2a.")
+        return model_java.physics().create(tag, physics_type, geometry_tag)
+    return component_container(model_java, component_name).physics().create(tag, physics_type)
 
 
 def prepare_legacy_environment(root: Path) -> None:

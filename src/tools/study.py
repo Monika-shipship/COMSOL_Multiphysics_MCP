@@ -3,8 +3,44 @@
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
+from ..comsol_compat import is_legacy_model
 from .session import session_manager
 from ..async_handler.solver import async_solver
+
+
+def _create_study_step(study, step_name: str, step_type: str, legacy: bool) -> None:
+    """Create a study step using the API shape required by the COMSOL version."""
+    if legacy:
+        legacy_types = {
+            "stat": "Stationary",
+            "time": "Transient",
+            "eig": "Eigenfrequency",
+            "freq": "Frequency",
+            "pert": "Perturbation",
+        }
+        study.feature().create(step_name, legacy_types.get(step_type, step_type))
+    else:
+        study.create(step_name, step_type)
+
+
+def _solve_legacy_study(model_java, study_name: Optional[str]) -> None:
+    """Run COMSOL 5.2a studies by Java tag instead of MPh's localized labels."""
+    if study_name:
+        model_java.study(study_name).run()
+        return
+    for tag in model_java.study().tags():
+        model_java.study(tag).run()
+
+
+def _start_async_solve(model, study_name: Optional[str]) -> bool:
+    """Start a solve while preserving COMSOL 5.2a Java study tags."""
+    if is_legacy_model(model.java):
+        return async_solver.start_solve(
+            model,
+            study_name,
+            solve_callable=lambda: _solve_legacy_study(model.java, study_name),
+        )
+    return async_solver.start_solve(model, study_name)
 
 
 def register_study_tools(mcp: FastMCP) -> None:
@@ -101,7 +137,7 @@ def register_study_tools(mcp: FastMCP) -> None:
             step_type = TYPE_MAP.get(study_type, study_type)
 
             study = jm.study().create(study_tag)
-            study.create("step1", step_type)
+            _create_study_step(study, "step1", step_type, legacy=is_legacy_model(jm))
 
             return {
                 "success": True,
@@ -147,14 +183,17 @@ def register_study_tools(mcp: FastMCP) -> None:
         
         try:
             if wait:
-                model.solve(study_name)
+                if is_legacy_model(model.java):
+                    _solve_legacy_study(model.java, study_name)
+                else:
+                    model.solve(study_name)
                 return {
                     "success": True,
                     "study": study_name,
                     "message": "Solving completed.",
                 }
             else:
-                started = async_solver.start_solve(model, study_name)
+                started = _start_async_solve(model, study_name)
                 if started:
                     return {
                         "success": True,
@@ -203,7 +242,7 @@ def register_study_tools(mcp: FastMCP) -> None:
             }
         
         try:
-            started = async_solver.start_solve(model, study_name)
+            started = _start_async_solve(model, study_name)
             if started:
                 return {
                     "success": True,

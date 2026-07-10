@@ -67,7 +67,8 @@ class AsyncSolver:
         self,
         model,
         study_name: Optional[str] = None,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+        solve_callable: Optional[Callable[[], None]] = None,
     ) -> bool:
         """
         Start solving a study in a background thread.
@@ -120,7 +121,10 @@ class AsyncSolver:
                     self._set_cancelled()
                     return
                 
-                model.solve(study_name)
+                if solve_callable:
+                    solve_callable()
+                else:
+                    model.solve(study_name)
                 
                 if self._cancel_flag:
                     self._set_cancelled()
