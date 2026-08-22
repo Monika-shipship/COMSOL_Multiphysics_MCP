@@ -67,6 +67,13 @@ def _create_boundary_feature(physics, geometry, tag: str, boundary_condition: st
     return physics.create(tag, feature_type)
 
 
+def _create_generic_boundary_feature(model_java, physics, tag: str, boundary_condition: str):
+    """Create a boundary feature through the API required by the model generation."""
+    legacy = is_legacy_model(model_java)
+    geometry = model_java.geom(first_geometry_tag(model_java)) if legacy else None
+    return _create_boundary_feature(physics, geometry, tag, boundary_condition, legacy)
+
+
 def _boundary_property_name(boundary_condition: str, property_name: str, legacy: bool) -> str:
     """Map boundary properties whose COMSOL 5.2a names differ from newer APIs."""
     if legacy and boundary_condition == "Inlet" and property_name == "U0":
@@ -1177,7 +1184,7 @@ def register_physics_tools(mcp: FastMCP) -> None:
                 return {"success": False, "error": f"Physics interface not found: {physics_name}"}
 
             tag = _make_tag("bc")
-            bc = physics_java.create(tag, boundary_condition_type)
+            bc = _create_generic_boundary_feature(jm, physics_java, tag, boundary_condition_type)
             bc.selection().set([int(b) for b in boundary_numbers])
 
             for prop_name, prop_value in properties.items():

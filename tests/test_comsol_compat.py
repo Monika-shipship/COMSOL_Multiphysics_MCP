@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+import pytest
+
 
 def test_build_legacy_backend_from_comsol_root(tmp_path: Path):
     from src.comsol_compat import build_legacy_backend
@@ -67,6 +69,41 @@ def test_geometry_feature_properties_accept_nested_kwargs():
         "p1": "0",
         "p2": "1",
     }
+
+
+def test_create_legacy_generic_feature_uses_tag_type_order_and_properties():
+    from src.tools.geometry import _create_legacy_generic_feature
+
+    class Feature:
+        def __init__(self):
+            self.values = []
+
+        def set(self, name, value):
+            self.values.append((name, value))
+
+    class Features:
+        def __init__(self):
+            self.calls = []
+            self.feature = Feature()
+
+        def tags(self):
+            return ["pt1"]
+
+        def create(self, *args):
+            self.calls.append(args)
+            return self.feature
+
+    class Geometry:
+        def __init__(self):
+            self.features = Features()
+
+        def feature(self):
+            return self.features
+
+    geometry = Geometry()
+    assert _create_legacy_generic_feature(geometry, "Point", None, {"p": ["0", "1"]}) == "pt2"
+    assert geometry.features.calls == [("pt2", "Point")]
+    assert geometry.features.feature.values == [("p", ["0", "1"])]
 
 
 def test_resolve_geometry_name_maps_comsol_tag_to_localized_label():
@@ -265,6 +302,41 @@ def test_create_legacy_boundary_feature_uses_boundary_api_and_dimension():
     assert physics.features.calls == [("temp1", "TemperatureBoundary", 1)]
 
 
+def test_create_generic_boundary_feature_uses_legacy_temperature_mapping():
+    from src.tools.physics import _create_generic_boundary_feature
+
+    class Geometry:
+        def getSDim(self):
+            return 2
+
+    class Features:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, *args):
+            self.calls.append(args)
+            return "boundary"
+
+    class Physics:
+        def __init__(self):
+            self.features = Features()
+
+        def feature(self):
+            return self.features
+
+    class Geometries:
+        def tags(self):
+            return ["geom1"]
+
+    class Model:
+        def geom(self, name=None):
+            return Geometries() if name is None else Geometry()
+
+    physics = Physics()
+    assert _create_generic_boundary_feature(Model(), physics, "bc1", "Temperature") == "boundary"
+    assert physics.features.calls == [("bc1", "TemperatureBoundary", 1)]
+
+
 def test_solve_legacy_study_runs_java_study_tag():
     from src.tools.study import _solve_legacy_study
 
@@ -397,7 +469,7 @@ def test_resolve_results_dataset_uses_first_available_dataset():
     assert _resolve_dataset(Model(), "custom") == "custom"
 
 
-def test_resolve_results_dataset_uses_legacy_java_dataset_tag():
+def test_resolve_results_dataset_keeps_mph_dataset_label_for_legacy_model():
     from src.tools.results import _resolve_dataset
 
     class Datasets:
@@ -418,7 +490,28 @@ def test_resolve_results_dataset_uses_legacy_java_dataset_tag():
         def datasets(self):
             return ["Study 1//Solution 1"]
 
-    assert _resolve_dataset(Model(), None) == "dset1"
+    assert _resolve_dataset(Model(), None) == "Study 1//Solution 1"
+
+
+def test_legacy_export_dataset_uses_java_dataset_tag():
+    from src.tools.results import _legacy_export_dataset
+
+    class Datasets:
+        def tags(self):
+            return ["dset1"]
+
+    class Results:
+        def dataset(self):
+            return Datasets()
+
+    class JavaModel:
+        def result(self):
+            return Results()
+
+    class Model:
+        java = JavaModel()
+
+    assert _legacy_export_dataset(Model()) == "dset1"
 
 
 def test_legacy_model_inspection_reads_top_level_java_tags():
@@ -726,3 +819,16 @@ def test_pdf_search_dependency_probe_does_not_import_embedding_modules(monkeypat
 
     assert embedded._pdf_search_ready() is True
     assert requested == ["fitz"]
+
+
+def test_mcp_tool_matrix_required_calls_fail_fast_with_the_tool_error():
+    from scripts.run_mcp_tool_matrix import require_success
+
+    value = {"success": True, "model": {"name": "matrix_heat"}}
+    assert require_success("model_create", value) is value
+
+    with pytest.raises(RuntimeError, match="comsol_start.*installation not found"):
+        require_success(
+            "comsol_start",
+            {"success": False, "error": "installation not found"},
+        )

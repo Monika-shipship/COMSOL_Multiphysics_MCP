@@ -8,3 +8,5 @@ comsol_models/matrix_heat_manual.mph
 comsol_models/matrix_heat_manual/
 comsol_models/round2_load.mph
 comsol_models/export_probe/
+comsol_models/matrix_heat/
+comsol_models/matrix_saved/

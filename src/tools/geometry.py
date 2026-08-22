@@ -67,6 +67,24 @@ def _create_legacy_union(geometry, input_objects: Sequence[str]) -> str:
     return tag
 
 
+def _create_legacy_generic_feature(geometry, feature_type: str, feature_name: Optional[str], properties: dict) -> str:
+    """Create a generic geometry feature through COMSOL 5.2a's Java API."""
+    features = geometry.feature()
+    prefixes = {
+        "Point": "pt",
+        "Block": "blk",
+        "Cylinder": "cyl",
+        "Sphere": "sph",
+        "Rectangle": "r",
+        "Circle": "c",
+    }
+    tag = feature_name or _next_feature_tag(features, prefixes.get(feature_type, feature_type.lower()[:3]))
+    feature = features.create(tag, feature_type)
+    for name, value in properties.items():
+        feature.set(name, value)
+    return tag
+
+
 def _get_geometry_node(model, geometry_name: Optional[str], component_name: str = "comp1"):
     """Helper to get geometry node via Java API.
     
@@ -228,10 +246,33 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             if target_geom is None:
                 return {"success": False, "error": f"Geometry not found: {geometry_name}"}
             
+            properties = _geometry_feature_properties(kwargs)
+            if is_legacy_model(model.java):
+                legacy_geometry = next(
+                    (
+                        geometry for geometry in java_geometries
+                        if str(geometry.tag()) == geometry_name or str(geometry.label()) == target_geom
+                    ),
+                    None,
+                )
+                if legacy_geometry is None:
+                    return {"success": False, "error": f"Geometry not found: {geometry_name}"}
+                created_name = _create_legacy_generic_feature(
+                    legacy_geometry, feature_type, feature_name, properties
+                )
+                return {
+                    "success": True,
+                    "feature": {
+                        "name": created_name,
+                        "type": feature_type,
+                        "geometry": str(legacy_geometry.tag()),
+                    }
+                }
+
             geom_node = model / "geometries" / target_geom
             feature_node = _create_geometry_feature(geom_node, feature_type, feature_name)
-            
-            for prop_name, prop_value in _geometry_feature_properties(kwargs).items():
+
+            for prop_name, prop_value in properties.items():
                 try:
                     feature_node.property(prop_name, prop_value)
                 except Exception:

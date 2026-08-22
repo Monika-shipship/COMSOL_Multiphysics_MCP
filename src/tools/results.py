@@ -12,12 +12,14 @@ def _resolve_dataset(model, dataset: Optional[str]) -> Optional[str]:
     """Choose the current model's first dataset when no explicit tag is supplied."""
     if dataset:
         return dataset
-    java_model = getattr(model, "java", None)
-    if java_model is not None and is_legacy_model(java_model):
-        tags = java_model.result().dataset().tags()
-        return str(tags[0]) if tags else None
     datasets = model.datasets()
     return datasets[0] if datasets else None
+
+
+def _legacy_export_dataset(model) -> Optional[str]:
+    """Return the internal dataset tag required by COMSOL 5.2a export nodes."""
+    tags = model.java.result().dataset().tags()
+    return str(tags[0]) if tags else None
 
 
 def _create_legacy_data_export(exports, tag: str, dataset: str, file_path: str):
@@ -255,7 +257,7 @@ def register_results_tools(mcp: FastMCP) -> None:
         
         try:
             if file_path and is_legacy_model(model.java):
-                dataset = _resolve_dataset(model, None)
+                dataset = _legacy_export_dataset(model)
                 if not dataset:
                     return {"success": False, "error": "No solution dataset is available for data export."}
                 output = Path(file_path).expanduser()
