@@ -1,0 +1,13 @@
+# Copy this block into your Codex config.toml and adjust only the paths.
+# The launcher injects the process-local JAVA_TOOL_OPTIONS value itself.
+
+[mcp_servers.COMSOL_LiveLink]
+type = "stdio"
+command = 'D:\Repos\COMSOL_Multiphysics_MCP\runtime\python52a\Scripts\python.exe'
+args = ['D:\Repos\COMSOL_Multiphysics_MCP\scripts\start_comsol52a.py', '--backend', 'livelink']
+startup_timeout_sec = 120
+tool_timeout_sec = 660
+
+[mcp_servers.COMSOL_LiveLink.env]
+COMSOL_ROOT = 'D:\Program Files\COMSOL\COMSOL52a\Multiphysics'
+MATLAB_EXE = 'D:\Program Files\MATLAB\R2025b\bin\matlab.exe'

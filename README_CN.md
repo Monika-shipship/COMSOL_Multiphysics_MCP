@@ -1,375 +1,47 @@
-# COMSOL MCP Server
+# COMSOL 5.2a Windows 版 MCP
 
-基于 MCP 协议的 COMSOL Multiphysics 仿真自动化服务器，支持 AI 代理（如 Claude）直接控制 COMSOL 进行多物理场仿真。
+这个分支维护 COMSOL Multiphysics 5.2a 在本机的 MCP 接口，针对的版本是 **5.2.1.152，Windows x64**。仓库包含 MATLAB LiveLink 入口和 Python/MPh 工具服务。本次原生启动修复只验证了 5.2a，不承诺适用于 5.6 或 6.x。
 
-[English](README.md) | 中文
+[English](README.md) · [更新记录](CHANGELOG.md) · [启动故障说明](docs/comsol52a-startup.md)
 
-## ⭐ Star History
+遇到的故障是 Java 加载 `csutil.dll` 时报告找不到依赖库，随后出现 `FlLicense` 类初始化失败。文件实际存在，问题出在进程内的 DLL 加载环境。仓库中的 Java native agent 会在初始化前注册搜索目录并预加载 COMSOL 原生库。修复只作用于 MCP 及其子进程，不替换 COMSOL 文件，不改系统 PATH、注册表或 MATLAB 用户配置。
 
-[![GitHub stars](https://img.shields.io/github/stars/wjc9011/COMSOL_Multiphysics_MCP?style=social)](https://github.com/wjc9011/COMSOL_Multiphysics_MCP/stargazers)
+## 安装
 
-[![Star History Chart](https://starchart.cc/wjc9011/COMSOL_Multiphysics_MCP.svg)](https://starchart.cc/wjc9011/COMSOL_Multiphysics_MCP)
+直接把仓库放在希望使用的盘符下。Python 环境、编译临时文件和运行输出都放在仓库内的 `runtime`、`runs` 目录，不需要另装一份 COMSOL。
 
-## 🎯 项目目标
-
-构建完整的 COMSOL MCP Server，使 AI 代理能够通过 MCP 协议执行多物理场仿真：
-
-1. **模型管理** - 创建、加载、保存、版本控制
-2. **几何建模** - 长方体、圆柱、球体、布尔运算
-3. **物理场配置** - 传热、流体、静电、固体力学
-4. **网格与求解** - 自动网格划分、稳态/瞬态研究
-5. **结果可视化** - 表达式求值、导出图表
-6. **知识库集成** - 内置物理指南 + PDF 语义搜索
-
-## 📋 系统要求
-
-| 组件 | 要求 |
-|------|------|
-| COMSOL Multiphysics | 5.x 或 6.x 版本 |
-| Python | 3.10+（**不要使用 Microsoft Store 版本**） |
-| Java 运行时 | MPh/COMSOL 需要 |
-
-## 🚀 安装步骤
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/wjc9011/COMSOL_Multiphysics_MCP.git
-cd COMSOL_Multiphysics_MCP
-
-# 2. 安装依赖
-python -m pip install -e .
-
-# 3. 测试服务器
-python -m src.server
+```powershell
+git clone --branch codex/comsol-52a-base-compat https://github.com/Monika-shipship/COMSOL_Multiphysics_MCP.git D:\Repos\COMSOL_Multiphysics_MCP
+cd D:\Repos\COMSOL_Multiphysics_MCP
+.\scripts\setup_comsol52a.ps1 -Python 'D:\Program Files\Python313\python.exe'
 ```
 
-### 构建 PDF 知识库（可选）
+把对应 GitHub Release 中的 `dllpath-rust-agent.dll` 放到 `runtime/native-loader`。已经有 Rust x64 Windows GNU 工具链时，也可以执行 `scripts/build_native_loader.ps1` 从源码编译；构建脚本使用 Rust 自带的链接器。
 
-```bash
-# 安装额外依赖
-pip install pymupdf chromadb sentence-transformers
+本机验证组合为 Python 3.13 x64、MPh 1.3.1、JPype 1.5.2 和 COMSOL 自带的 Java 8 (`1.8.0_66`)。LiveLink 使用 MATLAB R2025b；这只是本机实测结果，不代表 COMSOL 官方支持 5.2a 与该 MATLAB 版本的组合。Python/MPh 入口不需要 MATLAB。COMSOL、MATLAB 和模型所需模块的许可证由用户自行提供。
 
-# 构建知识库
-python scripts/build_knowledge_base.py
+## 接入 Codex
 
-# 检查状态
-python scripts/build_knowledge_base.py --status
+按 [英文 README 的配置示例](README.md#codex-configuration)填写实际路径。两个入口都位于本仓库：`scripts/start_comsol52a.py --backend livelink` 提供四个 LiveLink 工具；`--backend mph` 启动原有的模型、几何、网格、求解和导出工具服务。启动脚本会定位仓库内的 loader，不要再保留旧的 `JAVA_TOOL_OPTIONS=-agentpath:...` 设置。
+
+注册后新建 Codex 对话，让它加载工具。先调用 `status` 读取当前状态，再根据需要启动服务器。每次 `run_matlab` 都生成独立目录，保存脚本、标准输出和错误日志。
+
+## 验证与使用边界
+
+```powershell
+$env:COMSOL_ROOT = 'D:\Program Files\COMSOL\COMSOL52a\Multiphysics'
+$env:MATLAB_EXE = 'D:\Program Files\MATLAB\R2025b\bin\matlab.exe'
+.\runtime\python52a\Scripts\python.exe .\scripts\verify_livelink52a.py
 ```
 
-## ⚙️ 配置方法
+脚本通过真实 MCP 协议启动服务并求解一维 PDE，验收值是中点 `u=50`。报告记录退出结果、日志、进程、2036 端口以及实际输出文件。存在其他 COMSOL/MATLAB/Java 会话时脚本会退出，不接管已有进程。
 
-### 方法一：Claude Desktop 配置
+批处理返回码 0 或端口监听不等于求解成功，必须一起检查求解日志、数值和输出 MPH。本轮原始 `comsolbatch.exe` 还在网格拓展阶段出现过独立失败；不要把 LiveLink 通过写成所有启动路线都通过。
 
-编辑 `%APPDATA%\Claude\claude_desktop_config.json`（Windows）或 `~/Library/Application Support/Claude/claude_desktop_config.json`（macOS）：
+处理自己的模型时，请先复制 MPH，另存求解结果。模型物理场、边界和容差要可追溯；较新 COMSOL 版本的 API 示例不能直接当作 5.2a 的依据。
 
-```json
-{
-  "mcpServers": {
-    "comsol": {
-      "command": "python",
-      "args": ["-m", "src.server"],
-      "cwd": "/path/to/COMSOL_Multiphysics_MCP"
-    }
-  }
-}
-```
+停用时删除对应 MCP 配置即可。运行环境和日志留在仓库中，停掉相关进程后可按需清理，COMSOL 安装目录没有文件需要还原。
 
-### 方法二：Claude Code 配置
+## 来源
 
-在项目根目录创建 `.mcp.json`：
-
-```json
-{
-  "mcpServers": {
-    "comsol": {
-      "command": "python",
-      "args": ["-m", "src.server"],
-      "cwd": "/path/to/COMSOL_Multiphysics_MCP",
-      "env": {
-        "JAVA_HOME": "/path/to/java"
-      }
-    }
-  }
-}
-```
-
-### 方法三：opencode 配置
-
-在项目根目录创建 `opencode.json`：
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "comsol": {
-      "type": "local",
-      "command": ["python", "-m", "src.server"],
-      "enabled": true,
-      "environment": {
-        "HF_ENDPOINT": "https://hf-mirror.com"
-      },
-      "timeout": 30000
-    }
-  }
-}
-```
-
-## 📁 代码结构
-
-```
-COMSOL_Multiphysics_MCP/
-├── src/
-│   ├── server.py                    # MCP 服务器入口
-│   ├── tools/
-│   │   ├── session.py               # COMSOL 会话管理
-│   │   ├── model.py                 # 模型 CRUD + 版本控制
-│   │   ├── parameters.py            # 参数管理 + 参数扫描
-│   │   ├── geometry.py              # 几何创建（长方体/圆柱/球）
-│   │   ├── physics.py               # 物理场接口 + 边界条件
-│   │   ├── mesh.py                  # 网格生成
-│   │   ├── study.py                 # 研究创建 + 求解（同步/异步）
-│   │   └── results.py               # 结果求值 + 导出
-│   ├── resources/
-│   │   └── model_resources.py       # MCP 资源（模型树、参数）
-│   ├── knowledge/
-│   │   ├── embedded.py              # 内置物理指南 + 故障排除
-│   │   ├── retriever.py             # PDF 向量搜索
-│   │   └── pdf_processor.py         # PDF 分块 + 嵌入
-│   ├── async_handler/
-│   │   └── solver.py                # 异步求解 + 进度追踪
-│   └── utils/
-│       └── versioning.py            # 模型版本路径管理
-├── scripts/
-│   └── build_knowledge_base.py      # 构建 PDF 向量数据库
-├── client_script/                   # 独立建模脚本（示例）
-└── comsol_models/                   # 保存的模型（结构化）
-```
-
-## 🛠️ 可用工具（80+ 个）
-
-### 会话管理（4 个）
-
-| 工具 | 说明 |
-|------|------|
-| `comsol_start` | 启动本地 COMSOL 客户端 |
-| `comsol_connect` | 连接远程服务器 |
-| `comsol_disconnect` | 清除会话 |
-| `comsol_status` | 获取会话信息 |
-
-### 模型管理（9 个）
-
-| 工具 | 说明 |
-|------|------|
-| `model_load` | 加载 .mph 文件 |
-| `model_create` | 创建空模型 |
-| `model_create_component` | 创建组件（支持 2D/3D） |
-| `model_save` | 保存到文件 |
-| `model_save_version` | 带时间戳保存 |
-| `model_list` | 列出已加载模型 |
-| `model_set_current` | 设置当前模型 |
-| `model_clone` | 克隆模型 |
-| `model_inspect` | 获取模型结构 |
-
-### 参数管理（5 个）
-
-| 工具 | 说明 |
-|------|------|
-| `param_get` | 获取参数值 |
-| `param_set` | 设置参数 |
-| `param_list` | 列出所有参数 |
-| `param_sweep_setup` | 设置参数扫描 |
-| `param_description` | 获取/设置参数描述 |
-
-### 几何建模（14 个）
-
-| 工具 | 说明 |
-|------|------|
-| `geometry_list` | 列出几何序列 |
-| `geometry_create` | 创建几何序列 |
-| `geometry_add_feature` | 添加通用特征 |
-| `geometry_add_block` | 添加长方体 |
-| `geometry_add_cylinder` | 添加圆柱体 |
-| `geometry_add_sphere` | 添加球体 |
-| `geometry_add_rectangle` | 添加 2D 矩形 |
-| `geometry_add_circle` | 添加 2D 圆形 |
-| `geometry_boolean_union` | 布尔并集 |
-| `geometry_boolean_difference` | 布尔差集 |
-| `geometry_import` | 导入 CAD 文件 |
-| `geometry_build` | 构建几何 |
-| `geometry_list_features` | 列出特征 |
-| `geometry_get_boundaries` | 获取边界编号 |
-
-### 物理场配置（16 个）
-
-| 工具 | 说明 |
-|------|------|
-| `physics_list` | 列出物理场接口 |
-| `physics_get_available` | 可用物理场类型 |
-| `physics_add` | 添加通用物理场 |
-| `physics_add_electrostatics` | 添加静电场 |
-| `physics_add_solid_mechanics` | 添加固体力学 |
-| `physics_add_heat_transfer` | 添加传热 |
-| `physics_add_laminar_flow` | 添加层流 |
-| `physics_configure_boundary` | 配置边界条件 |
-| `physics_set_material` | 分配材料 |
-| `physics_list_features` | 列出物理场特征 |
-| `physics_remove` | 删除物理场 |
-| `multiphysics_add` | 添加多物理场耦合 |
-| `physics_interactive_setup_heat` | 交互式传热设置 |
-| `physics_setup_heat_boundaries` | 配置传热边界 |
-| `physics_interactive_setup_flow` | 交互式流体设置 |
-| `physics_boundary_selection` | 通用边界设置 |
-
-### 网格划分（3 个）
-
-| 工具 | 说明 |
-|------|------|
-| `mesh_list` | 列出网格序列 |
-| `mesh_create` | 生成网格 |
-| `mesh_info` | 获取网格统计 |
-
-### 研究与求解（9 个）
-
-| 工具 | 说明 |
-|------|------|
-| `study_list` | 列出研究 |
-| `study_create` | 创建研究（稳态/瞬态/特征频率） |
-| `study_solve` | 同步求解 |
-| `study_solve_async` | 后台求解 |
-| `study_get_progress` | 获取进度 |
-| `study_cancel` | 取消求解 |
-| `study_wait` | 等待完成 |
-| `solutions_list` | 列出解 |
-| `datasets_list` | 列出数据集 |
-
-### 结果后处理（8 个）
-
-| 工具 | 说明 |
-|------|------|
-| `results_evaluate` | 求值表达式 |
-| `results_global_evaluate` | 求值标量 |
-| `results_inner_values` | 获取时间步 |
-| `results_outer_values` | 获取扫描值 |
-| `results_export_data` | 导出数据 |
-| `results_export_image` | 导出图像 |
-| `results_exports_list` | 列出导出节点 |
-| `results_plots_list` | 列出绘图节点 |
-
-### 知识库（8 个）
-
-| 工具 | 说明 |
-|------|------|
-| `docs_get` | 获取文档 |
-| `docs_list` | 列出可用文档 |
-| `physics_get_guide` | 物理场快速指南 |
-| `troubleshoot` | 故障排除帮助 |
-| `modeling_best_practices` | 最佳实践 |
-| `pdf_search` | 搜索 PDF 文档 |
-| `pdf_search_status` | PDF 搜索状态 |
-| `pdf_list_modules` | 列出 PDF 模块 |
-
-## 📚 使用示例
-
-### 示例 1：芯片热分析（TSV）
-
-3D 热分析：含硅通孔（TSV）的硅芯片。
-
-**几何**: 60×60×5 µm 芯片，5 µm 直径 TSV 孔，10×10 µm 热源
-
-```python
-# 主要步骤：
-# 1. 创建芯片块和 TSV 圆柱
-# 2. 布尔差集（从芯片减去 TSV）
-# 3. 添加硅材料（k=130 W/m·K）
-# 4. 添加传热物理场
-# 5. 设置顶部热通量，底部固定温度
-# 6. 求解并评估温度分布
-```
-
-**脚本**: `client_script/create_chip_tsv_final.py`
-
-### 示例 2：微混合器流体仿真
-
-微流控通道中的 3D 层流仿真。
-
-**几何**: 600×100×50 µm 矩形通道
-
-```python
-# 主要步骤：
-# 1. 创建矩形通道块
-# 2. 添加水材料（ρ=1000 kg/m³，μ=0.001 Pa·s）
-# 3. 添加层流物理场
-# 4. 设置入口速度（1 mm/s），出口压力
-# 5. 添加稀物质传递用于混合分析
-# 6. 求解并评估速度分布
-```
-
-**脚本**: `client_script/create_micromixer_auto.py`
-
-## 📝 关键技术说明
-
-### mph 库 API 模式
-
-```python
-# 通过属性访问 Java 模型（不是可调用对象）
-jm = model.java  # 不是 model.java()
-
-# 创建组件（第三个参数为维度）
-comp = jm.component().create('comp1', True, 3)  # 3 = 3D
-
-# 创建 3D 几何
-geom = comp.geom().create('geom1', 3)
-
-# 创建物理场
-physics = comp.physics().create('ht', 'HeatTransfer', 'geom1')
-
-# 创建边界条件
-bc = physics.create('bc1', 'HeatFlux')
-bc.selection().set([1, 2, 3])
-bc.set('q0', '1e6[W/m^2]')
-```
-
-### 边界条件属性名
-
-| 物理场 | 条件类型 | 属性名 |
-|--------|----------|--------|
-| 传热 | HeatFlux | `q0` |
-| 传热 | Temperature | `T0` |
-| 传热 | ConvectiveHeatFlux | `h`，`Text` |
-| 层流 | InletBoundary | `U0` |
-| 层流 | OutletBoundary | `p0` |
-| 固体力学 | Fixed | 无额外属性 |
-| 固体力学 | BoundaryLoad | `Fx`，`Fy`，`Fz` |
-
-### 离线嵌入模型
-
-PDF 搜索支持离线操作，使用本地 HuggingFace 缓存：
-
-```bash
-# 国内用户设置镜像
-export HF_ENDPOINT=https://hf-mirror.com
-```
-
-## 🔧 开发状态
-
-| 阶段 | 描述 | 状态 |
-|------|------|------|
-| 1 | 基础框架 + 会话 + 模型管理 | ✅ 完成 |
-| 2 | 参数 + 求解 + 结果 | ✅ 完成 |
-| 3 | 几何 + 物理场 + 网格 | ✅ 完成 |
-| 4 | 内置知识库 + 工具文档 | ✅ 完成 |
-| 5 | PDF 向量检索 | ✅ 完成 |
-| 6 | 集成测试 | 🔄 进行中 |
-
-## 📊 MCP 资源
-
-| URI | 说明 |
-|-----|------|
-| `comsol://session/info` | 会话信息 |
-| `comsol://model/{name}/tree` | 模型树结构 |
-| `comsol://model/{name}/parameters` | 模型参数 |
-| `comsol://model/{name}/physics` | 物理场接口 |
-
-## 📄 许可证
-
-MIT
+本项目基于 [wjc9011/COMSOL_Multiphysics_MCP](https://github.com/wjc9011/COMSOL_Multiphysics_MCP)，代码许可证见 [LICENSE](LICENSE)。原版的[英文工具说明](docs/upstream-guide.md)和[中文说明](docs/upstream-guide-zh.md)仍然保留，其中较新版本的示例需要另行核对。

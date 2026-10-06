@@ -11,7 +11,7 @@ if (-not $PythonPath) {
         $PythonPath = $env:COMSOL_MCP_PYTHON
     }
     else {
-        $PythonPath = Join-Path $env:USERPROFILE '.codex\mcp\COMSOL_Multiphysics_MCP_VENV\Scripts\python.exe'
+        $PythonPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'runtime\python52a\Scripts\python.exe'
     }
 }
 
