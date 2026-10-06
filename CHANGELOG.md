@@ -1,5 +1,14 @@
 # Changes
 
+## 2026-10-06: COMSOL 5.2a automation skill update
+
+- Added the maintained `comsol-automation` skill and Codex UI metadata to this repository.
+- Updated the Python, launcher and output paths to the repository-local runtime; made the verified LiveLink route the default.
+- Documented the unresolved batch route, COMSOL recovery writes to C:, and the difference between a working MCP service and tools loaded in a chat.
+- Added Windows directory-junction installation guidance so the local skill can follow the repository source.
+
+This update changes guidance only. It does not change MCP registration or the native loader.
+
 ## 2026-10-06: COMSOL 5.2a native startup repair
 
 This release targets COMSOL Multiphysics 5.2a, file version 5.2.1.152, on Windows x64.

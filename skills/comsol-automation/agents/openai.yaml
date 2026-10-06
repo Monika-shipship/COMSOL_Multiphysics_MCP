@@ -1,0 +1,4 @@
+interface:
+  display_name: "COMSOL Automation (5.2a)"
+  short_description: "Operate COMSOL 5.2a through verified LiveLink workflows."
+  default_prompt: "Use $comsol-automation to inspect or run a protected copy of a COMSOL 5.2a model and verify its outputs."

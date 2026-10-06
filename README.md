@@ -64,6 +64,18 @@ This uses the MCP stdio protocol to call `status`, `start_server` and `smoke_tes
 
 A zero launcher exit code or an open port alone does not prove that COMSOL solved a model. Check the solver log, numerical values and nonempty output MPH together. The raw `comsolbatch.exe` route failed separately at mesh extension during this investigation; see the diagnosis for the tested routes and limits.
 
+## Codex skill
+
+The [comsol-automation skill](skills/comsol-automation/SKILL.md) records the tested 5.2a LiveLink workflow, source-model protection and verification requirements. It was written with Codex for this local setup. Keep its source in this checkout; on Windows, a directory junction lets Codex load it without maintaining a second copy:
+
+```powershell
+$SkillSource = Join-Path (Get-Location) 'skills\comsol-automation'
+$SkillEntry = Join-Path $env:USERPROFILE '.codex\skills\comsol-automation'
+New-Item -ItemType Junction -Path $SkillEntry -Target $SkillSource
+```
+
+Run this from the repository root only if the entry does not already exist. If you use a custom `CODEX_HOME`, use its `skills` directory instead. Back up an existing skill before replacing it. The skill does not register the MCP or install a runtime. COMSOL may still write recovery files and logs to its user profile on C:, even when this checkout and all requested outputs are on D:.
+
 ## Working with models
 
 Load a copy of your source MPH and save results under a new name. Preserve the physics, boundary selections and solver settings unless the task calls for changing them. Numerical results must come from COMSOL. Python plots or independent calculations are not substitutes for a missing COMSOL solve.

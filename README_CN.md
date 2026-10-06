@@ -28,6 +28,10 @@ cd D:\Repos\COMSOL_Multiphysics_MCP
 
 ## 验证与使用边界
 
+仓库内的 [comsol-automation 技能](skills/comsol-automation/SKILL.md)保存了已验证的 5.2a LiveLink 流程、原模型保护要求和结果检查方法。这是用 Codex 为本机编写的技能。可按[英文说明](README.md#codex-skill)，将 Codex 技能目录中的入口链接到本仓库源码；已有技能应先备份。技能不会自动注册 MCP 或安装运行环境。
+
+即使仓库和输出都在 D 盘，COMSOL 仍可能向 C 盘用户目录写入恢复文件和日志。这些文件需要单独核查，不能把整个 `.comsol` 目录当缓存删除。
+
 ```powershell
 $env:COMSOL_ROOT = 'D:\Program Files\COMSOL\COMSOL52a\Multiphysics'
 $env:MATLAB_EXE = 'D:\Program Files\MATLAB\R2025b\bin\matlab.exe'
